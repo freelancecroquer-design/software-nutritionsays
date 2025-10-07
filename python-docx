@@ -1,0 +1,13 @@
+import streamlit as st
+import math
+from datetime import date
+from io import BytesIO
+import pandas as pd
+
+# import docx de forma segura
+try:
+    from docx import Document
+    from docx.shared import Pt
+    DOCX_AVAILABLE = True
+except Exception:
+    DOCX_AVAILABLE = False
