@@ -3,7 +3,7 @@ import math
 from datetime import date
 from io import BytesIO
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt
 import pandas as pd
 
 # =========================
@@ -19,7 +19,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Pequeño estilo
+# Estilos simples
 st.markdown(
     f"""
     <style>
@@ -42,12 +42,11 @@ st.title("Software de Gestión Nutricional – Consulta Clínica")
 # =========================
 # UTILIDADES CLÍNICAS
 # =========================
-def mifflin_st_jeor(sexo: str, peso: float, talla_cm: float, edad: int):
-    # peso kg, talla cm, edad años
+def mifflin_st_jeor(sexo: str, peso: float, talla_cm: float, edad: int) -> float:
+    """TMB Mifflin-St Jeor (kg, cm, años)."""
     if sexo.lower().startswith("m"):  # masculino
         return 10*peso + 6.25*talla_cm - 5*edad + 5
-    else:
-        return 10*peso + 6.25*talla_cm - 5*edad - 161
+    return 10*peso + 6.25*talla_cm - 5*edad - 161
 
 ACT_FACTORS = {
     "Reposo / cama": 1.2,
@@ -57,41 +56,57 @@ ACT_FACTORS = {
 }
 
 def homa_ir(glicemia_mg_dl: float, insulina_ui_ml: float):
-    # Convierte mg/dL a mmol/L (÷18), HOMA-IR = glucosa (mmol/L) * insulina / 22.5
-    if not glicemia_mg_dl or not insulina_ui_ml:
-        return None
-    g_mmol = glicemia_mg_dl / 18.0
-    return (g_mmol * insulina_ui_ml) / 22.5
+    """HOMA-IR = (glucosa mmol/L * insulina)/22.5. Devuelve None si faltan datos."""
+    try:
+        if glicemia_mg_dl and insulina_ui_ml and glicemia_mg_dl > 0 and insulina_ui_ml > 0:
+            g_mmol = glicemia_mg_dl / 18.0
+            return (g_mmol * insulina_ui_ml) / 22.5
+    except Exception:
+        pass
+    return None
 
 # =========================
-# LISTAS DE INTERCAMBIOS (simplificadas)
-# Valores aproximados por ración • Ajustables
+# LISTAS DE INTERCAMBIOS (simplificadas y AJUSTABLES)
 # =========================
 EXCHANGES = {
-    "Verduras": {"kcal":25,"CHO":5,"PRO":2,"GRASA":0,
-                 "porcion":"1 taza crudas o 1/2 taza cocidas",
-                 "ejemplos":"lechuga, espinaca, brócoli, calabacín"},
-    "Frutas": {"kcal":60,"CHO":15,"PRO":0,"GRASA":0,
-               "porcion":"1 unidad pequeña o 1/2 taza picada",
-               "ejemplos":"manzana, pera, naranja, fresas"},
-    "Cereales/Harinas": {"kcal":80,"CHO":15,"PRO":2,"GRASA":1,
-               "porcion":"1/2 taza cocidos o 1 tajada pan",
-               "ejemplos":"arroz, pasta, arepa 1/3 unid, pan 1 rebanada"},
-    "Lácteos descremados": {"kcal":90,"CHO":12,"PRO":8,"GRASA":0-3,
-               "porcion":"1 taza leche descremada o yogurt natural",
-               "ejemplos":"leche 1 taza, yogurt natural 1 taza"},
-    "Proteínas magras": {"kcal":110,"CHO":0,"PRO":21,"GRASA":3,
-               "porcion":"30 g cocidos",
-               "ejemplos":"pollo sin piel, pavo, merluza, claras"},
-    "Grasas saludables": {"kcal":45,"CHO":0,"PRO":0,"GRASA":5,
-               "porcion":"1 cda pequeña (5 g)",
-               "ejemplos":"aceite de oliva 1 cdita, aguacate 1/8 unid, nueces 6"},
-    "Azúcares/ultraprocesados": {"kcal":60,"CHO":15,"PRO":0,"GRASA":0,
-               "porcion":"variable (evitar/limitar)",
-               "ejemplos":"refrescos, golosinas, bollería"}
+    "Verduras": {
+        "kcal": 25, "CHO": 5, "PRO": 2, "GRASA": 0,
+        "porcion": "1 taza crudas o 1/2 taza cocidas",
+        "ejemplos": "lechuga, espinaca, brócoli, calabacín"
+    },
+    "Frutas": {
+        "kcal": 60, "CHO": 15, "PRO": 0, "GRASA": 0,
+        "porcion": "1 unidad pequeña o 1/2 taza picada",
+        "ejemplos": "manzana, pera, naranja, fresas"
+    },
+    "Cereales/Harinas": {
+        "kcal": 80, "CHO": 15, "PRO": 2, "GRASA": 1,
+        "porcion": "1/2 taza cocidos o 1 rebanada pan",
+        "ejemplos": "arroz, pasta, arepa 1/3 unid, pan 1 rebanada"
+    },
+    "Lácteos descremados": {
+        "kcal": 90, "CHO": 12, "PRO": 8, "GRASA": 2,  # ← FIX: antes había 0-3 (=-3)
+        "rango_grasa_txt": "0–3 g/ración (depende del producto)",
+        "porcion": "1 taza leche descremada o yogurt natural",
+        "ejemplos": "leche 1 taza, yogurt natural 1 taza"
+    },
+    "Proteínas magras": {
+        "kcal": 110, "CHO": 0, "PRO": 21, "GRASA": 3,
+        "porcion": "30 g cocidos",
+        "ejemplos": "pollo sin piel, pavo, merluza, claras"
+    },
+    "Grasas saludables": {
+        "kcal": 45, "CHO": 0, "PRO": 0, "GRASA": 5,
+        "porcion": "1 cdita (5 g)",
+        "ejemplos": "aceite de oliva 1 cdita, aguacate 1/8 unid, nueces 6"
+    },
+    "Azúcares/ultraprocesados": {
+        "kcal": 60, "CHO": 15, "PRO": 0, "GRASA": 0,
+        "porcion": "variable (evitar/limitar)",
+        "ejemplos": "refrescos, golosinas, bollería"
+    }
 }
 
-# Distribución por tiempo de comida (puedes ajustar)
 MEAL_SPLIT = {
     "Desayuno": 0.25,
     "Merienda AM": 0.10,
@@ -102,7 +117,7 @@ MEAL_SPLIT = {
 
 def kcal_plan(GET, objetivo):
     if objetivo == "Pérdida de peso":
-        return round(GET - 400) if GET >= 1600 else round(GET - 200)
+        return max(1000, round(GET - (400 if GET >= 1600 else 200)))
     if objetivo == "Mantenimiento":
         return round(GET)
     if objetivo == "Ganancia (magro)":
@@ -110,12 +125,8 @@ def kcal_plan(GET, objetivo):
     return round(GET)
 
 def raciones_sugeridas(kcal_total: int):
-    """
-    Reparto muy simple de raciones objetivo por día (puedes afinarlo):
-    - Vegetales altos (≥4), frutas 2-3, cereales 4-6, proteínas 3-5, grasas 3-5, lácteos 1-2
-    Escala según kcal_total.
-    """
-    f = max(1.0, min(2.0, kcal_total/2000))  # factor 1x a 2x aprox
+    """Guía base. Ajusta a tu protocolo."""
+    f = max(1.0, min(2.0, kcal_total/2000))  # 1x–2x
     base = {
         "Verduras": 4,
         "Frutas": 2,
@@ -124,14 +135,10 @@ def raciones_sugeridas(kcal_total: int):
         "Grasas saludables": 4,
         "Lácteos descremados": 1
     }
-    return {k: max(0, round(v*f)) for k,v in base.items()}
+    return {k: max(0, round(v*f)) for k, v in base.items()}
 
 def distribuir_por_comida(raciones_dia: dict):
-    """
-    Distribuye raciones por tiempos de comida usando MEAL_SPLIT.
-    Resultado: dict[meal][grupo] = raciones
-    """
-    plan = {meal:{} for meal in MEAL_SPLIT}
+    plan = {meal: {} for meal in MEAL_SPLIT}
     for grupo, total in raciones_dia.items():
         for meal, frac in MEAL_SPLIT.items():
             plan[meal][grupo] = round(total*frac, 1)
@@ -142,35 +149,30 @@ def recomendaciones(dm2: bool, hta: bool, obesidad: bool):
     if dm2:
         recs += [
             "Fraccionar ingestas (3 comidas + 1–2 meriendas) para estabilidad glucémica.",
-            "Priorizar carbohidratos complejos y fibra (verduras, legumbres, granos integrales).",
-            "Aumentar proteína magra en cada tiempo de comida para saciedad.",
+            "Elegir CHO complejos y fibra; proteína magra en cada tiempo.",
             "Limitar azúcares libres y ultraprocesados; bebidas sin azúcar.",
-            "Actividad física combinada: 150–300 min/sem de aeróbico + 2 días fuerza."
+            "AF: 150–300 min/sem aeróbico + 2 días fuerza."
         ]
     if hta:
         recs += [
-            "Plan tipo DASH: alto en verduras/frutas, lácteos descremados y grasas saludables.",
-            "Sodio < 2 g/día (≈5 g de sal); evitar ultraprocesados.",
+            "Patrón tipo DASH, alto en verduras/frutas y lácteos descremados.",
+            "Sodio <2 g/d (≈5 g de sal); evitar ultraprocesados.",
             "Hidratación adecuada; limitar alcohol."
         ]
     if obesidad:
         recs += [
-            "Déficit calórico moderado y progresivo; evitar restricciones extremas.",
-            "Sueño 7–9 h y manejo de estrés (impactan apetito/hormonas).",
-            "Actividad física adaptada a tolerancia y articulaciones (bajo impacto)."
+            "Déficit calórico moderado y progresivo.",
+            "Sueño 7–9 h y manejo del estrés.",
+            "AF de bajo impacto adaptada a tolerancia articular."
         ]
     if not recs:
         recs.append("Plan balanceado, variado y suficiente; movimiento diario y sueño reparador.")
     return recs
 
-def adime_plantilla(datos):
-    # Plantilla simple (puedes personalizar PES manualmente en campo de texto)
-    d = datos
-    dx = d.get("diagnostico_pes","(Completar PES individual)")
+def adime_plantilla(motivo, recall, imc, labs_txt, dx_pes):
     return {
-        "Valoración (A)": f"Motivo: {d.get('motivo','—')}. 24h: {d.get('recall','—')}. "
-                          f"IMC: {d.get('imc','—')} kg/m². Labs clave: {d.get('labs','—')}.",
-        "Diagnóstico (D)": dx,
+        "Valoración (A)": f"Motivo: {motivo or '—'}. 24h: {recall or '—'}. IMC: {imc} kg/m². Labs: {labs_txt or '—'}.",
+        "Diagnóstico (D)": dx_pes or "(Completar PES individual)",
         "Intervención (I)": "Plan por intercambios individualizado + educación nutricional.",
         "Monitoreo (M)": "Peso, perímetros, adherencia, glucemias/lípidos según caso.",
         "Evaluación (E)": "Ajustes por síntomas, tolerancia, metas y resultados de control."
@@ -178,7 +180,6 @@ def adime_plantilla(datos):
 
 def build_docx(payload):
     doc = Document()
-    # Estilos básicos
     style = doc.styles['Normal']
     style.font.name = 'Calibri'
     style.font.size = Pt(11)
@@ -192,19 +193,14 @@ def build_docx(payload):
     doc.add_paragraph(f"IMC: {payload['imc']} kg/m² | TMB: {payload['tmb']} kcal | GET: {payload['get']} kcal | Meta kcal: {payload['kcal_obj']} kcal")
 
     doc.add_heading("ADIME", level=2)
-    for k,v in payload['adime'].items():
+    for k, v in payload['adime'].items():
         doc.add_paragraph(f"{k}: {v}")
 
     doc.add_heading("Plan por Intercambios (raciones/día)", level=2)
     table = doc.add_table(rows=1, cols=7)
     hdr = table.rows[0].cells
-    hdr[0].text = "Grupo"
-    hdr[1].text = "Raciones"
-    hdr[2].text = "kcal/rac"
-    hdr[3].text = "CHO"
-    hdr[4].text = "PRO"
-    hdr[5].text = "GRASA"
-    hdr[6].text = "Porción/ejemplos"
+    hdr[0].text = "Grupo"; hdr[1].text = "Raciones"; hdr[2].text = "kcal/rac"
+    hdr[3].text = "CHO"; hdr[4].text = "PRO"; hdr[5].text = "GRASA"; hdr[6].text = "Porción/ejemplos"
     for g, r in payload['raciones_dia'].items():
         row = table.add_row().cells
         row[0].text = g
@@ -213,11 +209,12 @@ def build_docx(payload):
         row[3].text = str(EXCHANGES[g]["CHO"])
         row[4].text = str(EXCHANGES[g]["PRO"])
         row[5].text = str(EXCHANGES[g]["GRASA"])
-        row[6].text = f"{EXCHANGES[g]['porcion']} | {EXCHANGES[g]['ejemplos']}"
+        extra = " | " + EXCHANGES[g]["rango_grasa_txt"] if "rango_grasa_txt" in EXCHANGES[g] else ""
+        row[6].text = f"{EXCHANGES[g]['porcion']} | {EXCHANGES[g]['ejemplos']}{extra}"
 
     doc.add_heading("Distribución por comidas (raciones)", level=2)
     for meal, grupos in payload['plan_comidas'].items():
-        doc.add_paragraph(f"{meal}: " + "; ".join([f"{g} {v}" for g,v in grupos.items()]))
+        doc.add_paragraph(f"{meal}: " + "; ".join([f"{g} {v}" for g, v in grupos.items()]))
 
     doc.add_heading("Recomendaciones", level=2)
     for r in payload['recs']:
@@ -229,17 +226,17 @@ def build_docx(payload):
     return bio
 
 # =========================
-# UI – SIDEBAR (entrada)
+# UI – SIDEBAR
 # =========================
 with st.sidebar:
     st.subheader("Datos del paciente")
     paciente = st.text_input("Nombre del paciente")
-    sexo = st.selectbox("Sexo biológico", ["Femenino","Masculino"])
+    sexo = st.selectbox("Sexo biológico", ["Femenino", "Masculino"])
     edad = st.number_input("Edad (años)", 1, 120, 30)
     talla_cm = st.number_input("Talla (cm)", 100, 230, 165)
     peso = st.number_input("Peso (kg)", 30.0, 300.0, 75.0, step=0.1)
     act = st.selectbox("Actividad", list(ACT_FACTORS.keys()), index=1)
-    objetivo = st.selectbox("Objetivo", ["Pérdida de peso","Mantenimiento","Ganancia (magro)"], index=0)
+    objetivo = st.selectbox("Objetivo", ["Pérdida de peso", "Mantenimiento", "Ganancia (magro)"], index=0)
 
     st.markdown("---")
     st.subheader("Comorbilidades")
@@ -256,10 +253,10 @@ with st.sidebar:
 # =========================
 # UI – MAIN
 # =========================
-colA, colB = st.columns([2,1])
+colA, colB = st.columns([2, 1])
 with colA:
     st.subheader("Motivo de consulta / Historia breve")
-    motivo = st.text_area("Anamnesis breve", height=120, placeholder="Motivo principal, antecedentes relevantes, síntomas, medicación…")
+    motivo = st.text_area("Anamnesis breve", height=120, placeholder="Motivo principal, antecedentes, medicación…")
 
     st.subheader("Recordatorio 24 h (opcional)")
     recall = st.text_area("Descripción 24 h", height=140, placeholder="Desayuno, almuerzo, cena, snacks, bebidas…")
@@ -271,13 +268,14 @@ with colB:
 st.markdown("----")
 
 # Cálculos
-tmb = round(mifflin_st_jeor(sexo, peso, talla_cm, edad))
-get = round(tmb * ACT_FACTORS[act])
+tmb = max(800, round(mifflin_st_jeor(sexo, peso, talla_cm, edad)))
+get = max(tmb, round(tmb * ACT_FACTORS.get(act, 1.2)))
 kcal_obj = kcal_plan(get, objetivo)
 imc = round(peso / (talla_cm/100)**2, 2)
 homa = homa_ir(glicemia, insulina)
 labs_txt = f"Glicemia: {glicemia} mg/dL; Insulina: {insulina} µUI/mL; HbA1c: {hba1c}%"
-if homa: labs_txt += f"; HOMA-IR: {round(homa,2)}"
+if homa is not None:
+    labs_txt += f"; HOMA-IR: {round(homa, 2)}"
 
 st.subheader("Resumen antropométrico y de cálculo")
 st.markdown(
@@ -318,22 +316,15 @@ for r in recs:
     st.markdown(f"- {r}")
 
 # ADIME
-datos_adime = {
-    "motivo": motivo,
-    "recall": recall,
-    "imc": imc,
-    "labs": labs_txt,
-    "diagnostico_pes": dx_pes
-}
-adime = adime_plantilla(datos_adime)
+adime = adime_plantilla(motivo, recall, imc, labs_txt, dx_pes)
 
 with st.expander("Ver ADIME (plantilla)"):
-    for k,v in adime.items():
+    for k, v in adime.items():
         st.markdown(f"**{k}**: {v}")
 
 # Export
 payload = {
-    "paciente": paciente or "—",
+    "paciente": st.session_state.get("paciente", "") or "—",
     "fecha": date.today().isoformat(),
     "profesional": BRAND_NAME,
     "sexo": sexo,
@@ -353,7 +344,6 @@ payload = {
 st.markdown("---")
 col1, col2 = st.columns(2)
 with col1:
-    # Markdown
     md_lines = []
     md_lines.append(f"# {BRAND_NAME} · Informe Nutricional")
     md_lines.append(f"**Paciente:** {payload['paciente']}  \n**Fecha:** {payload['fecha']}")
@@ -361,13 +351,14 @@ with col1:
     md_lines.append("## Antropometría y cálculos")
     md_lines.append(f"- IMC: {imc} kg/m²  \n- TMB: {tmb} kcal  \n- GET: {get} kcal  \n- Meta: {kcal_obj} kcal")
     md_lines.append("## ADIME")
-    for k,v in adime.items(): md_lines.append(f"- **{k}:** {v}")
+    for k, v in adime.items(): md_lines.append(f"- **{k}:** {v}")
     md_lines.append("## Intercambios (raciones/día)")
     for g, r in raciones_dia.items():
-        md_lines.append(f"- {g}: {r} (kcal/rac {EXCHANGES[g]['kcal']}) – Porción: {EXCHANGES[g]['porcion']}")
+        extra = f" • {EXCHANGES[g]['rango_grasa_txt']}" if 'rango_grasa_txt' in EXCHANGES[g] else ""
+        md_lines.append(f"- {g}: {r} (kcal/rac {EXCHANGES[g]['kcal']}) – Porción: {EXCHANGES[g]['porcion']}{extra}")
     md_lines.append("## Distribución por comidas")
     for meal, grupos in plan_comidas.items():
-        md_lines.append(f"- **{meal}:** " + "; ".join([f"{g} {v}" for g,v in grupos.items()]))
+        md_lines.append(f"- **{meal}:** " + "; ".join([f"{g} {v}" for g, v in grupos.items()]))
     md_lines.append("## Recomendaciones")
     for r in recs: md_lines.append(f"- {r}")
     md_text = "\n".join(md_lines)
@@ -375,8 +366,12 @@ with col1:
     st.download_button("⬇️ Exportar Markdown", md_text, file_name="informe_nutritionsays.md")
 
 with col2:
-    # DOCX
     bio = build_docx(payload)
-    st.download_button("⬇️ Exportar DOCX", data=bio, file_name="informe_nutritionsays.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    st.download_button(
+        "⬇️ Exportar DOCX",
+        data=bio,
+        file_name="informe_nutritionsays.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
 
-st.caption("Este software es apoyo clínico para profesionales de la salud. Ajusta a juicio clínico y guías locales vigentes.")
+st.caption("Soporte clínico para profesionales. Ajustar a juicio clínico y guías locales.")
