@@ -1,13 +1,136 @@
-import streamlit as st
-import math
-from datetime import date
-from io import BytesIO
-import pandas as pd
+# ====== EXPORTADOR: Plan de alimentación estilo @nutritionsays ======
+def _mk_kv_table(doc, pairs):
+    t = doc.add_table(rows=0, cols=2)
+    for k, v in pairs:
+        row = t.add_row().cells
+        row[0].text = str(k); row[1].text = str(v)
+    for c in t.columns[0].cells: c.paragraphs[0].runs[0].bold = True
+    return t
 
-# import docx de forma segura
-try:
-    from docx import Document
-    from docx.shared import Pt
-    DOCX_AVAILABLE = True
-except Exception:
-    DOCX_AVAILABLE = False
+def _dist_table(doc, by_meal, daily):
+    cols = ["Lista","Desayuno","Merienda AM","Almuerzo","Merienda PM","Cena","Total"]
+    t = doc.add_table(rows=1, cols=len(cols))
+    for i, h in enumerate(cols): t.rows[0].cells[i].text = h
+    for g in daily.keys():
+        r = t.add_row().cells
+        r[0].text = g
+        tot = 0.0
+        for j, m in enumerate(["Desayuno","Merienda AM","Almuerzo","Merienda PM","Cena"], start=1):
+            val = by_meal.get(m,{}).get(g,0)
+            r[j].text = str(val); tot += float(val)
+        r[-1].text = str(round(tot,1))
+    return t
+
+def _menu_ejemplo_text(by_meal):
+    # Genera ejemplos simples y editables por tiempo de comida (2 días)
+    opciones = {
+        "Cereales": ["arepa mediana","arroz 1 ½ tz","pasta 1 ½ tz","pan 2–3 rebanadas","yuca/batata/papa"],
+        "Proteínas magras": ["pollo/pescado 1 trozo","carne magra 1 trozo","huevo 2 unid","atún ½ lata"],
+        "Vegetales": ["ensalada cruda mixta","crema de vegetales s/lácteos","salteado de brócoli y zanahoria"],
+        "Frutas": ["manzana/mandarina/lechoza","cambur ½ unid","melón/fresas 1 tz"],
+        "Lácteos descremados": ["leche 1 tz","yogurt natural/griego ¾ tz"],
+        "Grasas saludables": ["aguacate","aceite oliva/maíz 1 cdita","semillas (ajonjolí/chía) 1 cda"]
+    }
+    out = {}
+    for m in ["Desayuno","Merienda AM","Almuerzo","Merienda PM","Cena"]:
+        ejemplo1, ejemplo2 = [], []
+        for g, r in by_meal.get(m,{}).items():
+            if r and g in opciones:
+                ejemplo1.append(f"{opciones[g][0]}")
+                if len(opciones[g])>1: ejemplo2.append(f"{opciones[g][1]}")
+        out[m] = {"Día 1": "; ".join(ejemplo1) or "—",
+                  "Día 2": "; ".join(ejemplo2) or "—"}
+    return out
+
+def build_docx_plan_nutritionsays(payload, daily, by_meal):
+    """
+    Crea un DOCX editable con la estructura del PDF 'Plan de alimentación y recomendaciones nutricionales'
+    adaptado a los datos de la consulta.
+    """
+    doc = Document()
+    style = doc.styles["Normal"]; style.font.name = "Calibri"; style.font.size = Pt(11)
+
+    # Portada / encabezado
+    doc.add_heading("Plan de alimentación y recomendaciones nutricionales", level=0)
+    doc.add_paragraph("Comienza tu plan nutricional nutritivo y variado")
+    doc.add_paragraph(payload["paciente"]).runs[0].bold = True
+
+    # Diagnóstico nutricional (resumen)
+    doc.add_heading("Diagnóstico nutricional", level=1)
+    diag = payload["diagnostico"].strip() or "—"
+    doc.add_paragraph(diag)
+
+    # Datos antropométricos
+    doc.add_heading("Datos antropométricos", level=1)
+    pares = [
+        ("Peso actual", f"{payload['peso']} kg"),
+        ("Talla", f"{payload['talla_m']} m"),
+        ("IMC", f"{payload['imc']} kg/m²"),
+        ("Circ. Cintura", f"{payload.get('cintura','—')} cm"),
+        ("Circ. Cadera", f"{payload.get('cadera','—')} cm"),
+        ("Índice cintura/cadera", payload.get("whr","—")),
+        ("Índice cintura/talla", payload.get("whtr","—")),
+        ("% Grasa (pliegues/BIA)", payload.get("bf_txt","—")),
+        ("Peso usual", payload.get("peso_usual","—")),
+        ("Peso máx", payload.get("peso_max","—")),
+        ("Peso mín", payload.get("peso_min","—")),
+    ]
+    _mk_kv_table(doc, pares)
+
+    # Características del plan
+    doc.add_heading("Características del plan de alimentación", level=1)
+    bullets = [
+        f"Número de comidas: {payload['comidas']} (3 principales y {max(0,payload['comidas']-3)} meriendas)",
+        f"Calorías a consumir: {payload['kcal']} Kcal/d",
+        f"Cantidad de proteínas: {payload['prot_gkg']} g/kg (≈ {payload['macros']['g']['prot']} g/d)",
+        f"Cantidad de sal: {round(payload['sodium']['salt_g'],2)} g NaCl/d (≈ {payload['sodium']['tsp']} cdtas)",
+        f"Cantidad de agua: {payload['agua_l']} L/día",
+        f"Objetivo: {payload['objetivo']}",
+    ]
+    if payload["otras"]: bullets.append(f"Otras: {payload['otras']}")
+    for b in bullets: doc.add_paragraph(b, style=None).paragraph_format.left_indent = 0
+
+    # Listas de intercambios — raciones totales
+    doc.add_heading("Listas de intercambios – raciones totales diarias", level=1)
+    t = doc.add_table(rows=1, cols=7)
+    for i,h in enumerate(["Lista","Raciones","kcal/rac","CHO","PRO","FAT","Porción ref."]): t.rows[0].cells[i].text = h
+    for g, r in daily.items():
+        row = t.add_row().cells
+        row[0].text = g; row[1].text = str(r)
+        row[2].text = str(payload["catalog"][g]["kcal"])
+        row[3].text = str(payload["catalog"][g]["CHO"])
+        row[4].text = str(payload["catalog"][g]["PRO"])
+        row[5].text = str(payload["catalog"][g]["FAT"])
+        row[6].text = payload["catalog"][g]["portion"]
+
+    # Distribución por tiempos
+    doc.add_heading("Distribución de intercambios / raciones", level=1)
+    _dist_table(doc, by_meal, daily)
+
+    # Menú ejemplo (2 días)
+    doc.add_heading("Plan de alimentación – Menú ejemplo (2 días)", level=1)
+    menu = _menu_ejemplo_text(by_meal)
+    for m in ["Desayuno","Merienda AM","Almuerzo","Merienda PM","Cena"]:
+        p = doc.add_paragraph(); p.add_run(m).bold = True
+        doc.add_paragraph(f"Día 1: {menu[m]['Día 1']}")
+        doc.add_paragraph(f"Día 2: {menu[m]['Día 2']}")
+
+    # Recomendaciones (resumen editado)
+    doc.add_heading("Recomendaciones para ti", level=1)
+    recs = [
+        "Consumir ≥5 raciones entre frutas y vegetales/día; preferir frutas enteras y vegetales frescos o cocidos.",
+        "Preferir proteínas magras (pollo sin piel, pescados, atún al agua, huevos); limitar carnes rojas y embutidos (1–2 veces/sem).",
+        "Priorizar grasas mono y poliinsaturadas (aguacate, aceite de oliva/maíz, semillas); limitar saturadas y frituras.",
+        "Evitar bebidas azucaradas y ultraprocesados; si consumes dulces, que sea ocasional y en porciones pequeñas.",
+        "Usar 1/4 cdita (≈1 g) de sal distribuida en el día; preferir especias y condimentos naturales.",
+        "Hidratación: beber ~{:.1f} vasos/día (240 ml c/u).".format(payload['agua_l']*1000/240),
+        "Actividad física de fortalecimiento 3–5 d/sem; cardio suave 1–2 d/sem según tolerancia.",
+        "Dormir 7–8 h y practicar manejo de estrés (respiración, pausas activas)."
+    ]
+    for r in recs: doc.add_paragraph("• " + r)
+
+    # Marca
+    doc.add_paragraph("")
+    doc.add_paragraph(BRAND_NAME).runs[0].bold = True
+
+    bio = BytesIO(); doc.save(bio); bio.seek(0); return bio
