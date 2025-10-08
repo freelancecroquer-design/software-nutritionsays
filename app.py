@@ -1,9 +1,13 @@
-import streamlit as st
-import pandas as pd
+# app.py — @nutritionsays · Gestión Nutricional Clínica (UCV)
+
+import json
 from datetime import date
 from io import BytesIO
 
-# Import DOCX de forma segura (si falla, la app sigue con Markdown)
+import streamlit as st
+import pandas as pd
+
+# ---- DOCX opcional (si falla la instalación, la app sigue funcionando) ----
 try:
     from docx import Document
     from docx.shared import Pt
@@ -11,26 +15,37 @@ try:
 except Exception:
     DOCX_AVAILABLE = False
 
-# ====== BRANDING ======
+# =========================
+# BRANDING & LAYOUT
+# =========================
 BRAND_NAME = "@nutritionsays"
 PRIMARY = "#240046"
 ACCENT = "#b9b1ff"
 
-st.set_page_config(page_title=f"{BRAND_NAME} · Gestión Nutricional", page_icon="🍎", layout="centered")
+st.set_page_config(
+    page_title=f"{BRAND_NAME} · Gestión Nutricional",
+    page_icon="🍎",
+    layout="centered"
+)
 
 st.markdown(
     f"""
     <style>
-    .stApp {{ background: #faf9ff; }}
-    h1,h2,h3,h4 {{ color:{PRIMARY}; }}
-    .brand {{ display:inline-block; padding:6px 10px; border-radius:10px; background:{ACCENT}; color:#111; font-weight:600; }}
-    .box {{ border:1px solid #eee; border-radius:12px; padding:12px; background:#fff; }}
-    @media (max-width: 480px){{
-      .stApp {{ padding: .5rem; }}
-      h1 {{ font-size:1.4rem; }}
-      h2 {{ font-size:1.1rem; }}
-      .box {{ padding: 8px; }}
-    }}
+      .stApp {{ background:#faf9ff; }}
+      h1,h2,h3,h4 {{ color:{PRIMARY}; }}
+      .brand {{
+        display:inline-block; padding:6px 12px; border-radius:12px;
+        background:{ACCENT}; color:#111; font-weight:700; margin-bottom:6px;
+      }}
+      .box {{ border:1px solid #ececec; border-radius:14px; padding:12px; background:#fff; }}
+      .soft {{ color:#555; }}
+      /* Mobile tweaks */
+      @media (max-width: 480px){{
+        .stApp {{ padding:.5rem; }}
+        h1 {{ font-size:1.4rem; }}
+        h2 {{ font-size:1.1rem; }}
+        .box {{ padding:10px; }}
+      }}
     </style>
     """,
     unsafe_allow_html=True
@@ -39,85 +54,130 @@ st.markdown(
 st.markdown(f"<span class='brand'>{BRAND_NAME}</span>", unsafe_allow_html=True)
 st.title("Software de Gestión Nutricional – Consulta Clínica (UCV)")
 
-# ====== Utilidades ======
-ACT_FACTORS = {
-    "Reposo / cama": 1.2,
-    "Ligera (1–3 d/sem)": 1.375,
-    "Moderada (3–5 d/sem)": 1.55,
-    "Alta (6–7 d/sem)": 1.725
+# =========================
+# CATÁLOGO DE INTERCAMBIOS (base VE, editable)
+# =========================
+EXCHANGES = {
+    "Vegetales": {"kcal":25,"CHO":5,"PRO":2,"FAT":0,
+                  "portion":"1 taza crudas / 1/2 taza cocidas",
+                  "examples":["lechuga","espinaca","brócoli","chayota"]},
+    "Frutas": {"kcal":60,"CHO":15,"PRO":0,"FAT":0,
+               "portion":"1 unid pequeña / 1/2 taza picada",
+               "examples":["manzana","mandarina","lechoza 3/4 tz"]},
+    "Cereales": {"kcal":80,"CHO":15,"PRO":2,"FAT":1,
+                 "portion":"1/2 taza cocidos / 1 rebanada pan",
+                 "examples":["arroz 1/2 tz","pasta 1/2 tz","arepa 1/3 unid (50 g)","pan 1 reb"]},
+    "Leguminosas": {"kcal":100,"CHO":18,"PRO":7,"FAT":1,
+                    "portion":"1/2 taza cocidas",
+                    "examples":["caraotas","lentejas","frijol bayo"]},
+    "Lácteos descremados": {"kcal":90,"CHO":12,"PRO":8,"FAT":2,
+                            "portion":"1 taza leche / yogurt natural",
+                            "examples":["leche 1 tz","yogurt natural 1 tz"]},
+    "Proteínas magras": {"kcal":110,"CHO":0,"PRO":21,"FAT":3,
+                         "portion":"30 g cocidos",
+                         "examples":["pollo sin piel","pavo","pescado blanco","atún agua 1/2 lata"]},
+    "Grasas saludables": {"kcal":45,"CHO":0,"PRO":0,"FAT":5,
+                          "portion":"1 cdita (5 g)",
+                          "examples":["aceite 1 cdita","aguacate 1/8 unid","nueces 6"]}
 }
 
-def mifflin_st_jeor(sexo: str, peso: float, talla_cm: float, edad: int) -> float:
-    if sexo.lower().startswith("m"):
-        return 10*peso + 6.25*talla_cm - 5*edad + 5
-    return 10*peso + 6.25*talla_cm - 5*edad - 161
+# =========================
+# UTILIDADES CLÍNICAS
+# =========================
+ACTIVITY = {"Reposo / cama":1.2,"Ligera (1–3 d/sem)":1.375,"Moderada (3–5 d/sem)":1.55,"Alta (6–7 d/sem)":1.725}
 
-def homa_ir(glucosa_mg_dl: float, insulina_ui_ml: float):
-    try:
-        if glucosa_mg_dl > 0 and insulina_ui_ml > 0:
-            g_mmol = glucosa_mg_dl / 18.0
-            return (g_mmol * insulina_ui_ml) / 22.5
-    except Exception:
-        pass
+def mifflin_st_jeor(sex, weight_kg, height_cm, age_y):
+    return 10*weight_kg + 6.25*height_cm - 5*age_y + (5 if sex.lower().startswith("m") else -161)
+
+def tee_from_tmb(tmb, activity_key): return round(tmb * ACTIVITY.get(activity_key, 1.2))
+
+def kcal_target(tee, objective):
+    if objective=="Pérdida de peso": return max(1000, tee - (400 if tee>=1600 else 200))
+    if objective=="Ganancia (magro)": return tee + 200
+    return tee
+
+def bmi(weight_kg, height_cm):
+    h = max(1e-6, height_cm/100); return round(weight_kg/(h*h),2)
+
+def homa_ir(glucose_mg_dl, insulin_uU_ml):
+    if glucose_mg_dl>0 and insulin_uU_ml>0:
+        g_mmol = glucose_mg_dl/18.0
+        return round((g_mmol*insulin_uU_ml)/22.5,2)
     return None
 
-def kcal_objetivo(GET: int, objetivo: str):
-    if objetivo == "Pérdida de peso":
-        return max(1000, round(GET - (400 if GET >= 1600 else 200)))
-    if objetivo == "Mantenimiento":
-        return round(GET)
-    if objetivo == "Ganancia (magro)":
-        return round(GET + 200)
-    return round(GET)
-
-def macros_from_percent(kcal: int, p_prot: int, p_grasa: int, p_cho: int, peso: float, p_cho_complejo: int):
-    total = p_prot + p_grasa + p_cho
-    if total != 100:
-        p_prot = int(round(100 * p_prot / total))
-        p_grasa = int(round(100 * p_grasa / total))
-        p_cho = 100 - p_prot - p_grasa
-
-    g_prot = round((kcal * p_prot / 100) / 4, 1)
-    g_grasa = round((kcal * p_grasa / 100) / 9, 1)
-    g_cho = round((kcal * p_cho / 100) / 4, 1)
-
-    gkg_prot = round(g_prot / peso, 2) if peso else 0.0
-    gkg_cho  = round(g_cho  / peso, 2) if peso else 0.0
-
-    g_cho_complejos = round(g_cho * (p_cho_complejo/100), 1)
-    g_cho_simples   = round(g_cho - g_cho_complejos, 1)
-
+def macros(kcal, pct_prot, pct_fat, pct_cho, weight_kg, pct_cho_complex=85, fat_split=(10,35,55)):
+    # normaliza a 100%
+    total = max(1, pct_prot + pct_fat + pct_cho)
+    pct_prot = round(100*pct_prot/total); pct_fat = round(100*pct_fat/total); pct_cho = 100 - pct_prot - pct_fat
+    g_prot = round((kcal*pct_prot/100)/4,1)
+    g_fat  = round((kcal*pct_fat /100)/9,1)
+    g_cho  = round((kcal*pct_cho /100)/4,1)
+    gkg_prot = round(g_prot/weight_kg,2) if weight_kg else 0.0
+    gkg_cho  = round(g_cho/weight_kg,2) if weight_kg else 0.0
+    # CHO complejos vs simples
+    g_cho_c = round(g_cho*pct_cho_complex/100,1); g_cho_s = round(g_cho - g_cho_c,1)
+    # grasas: repartir dentro del % de grasa total
+    sat, poli, mono = fat_split
+    subtotal = max(1, sat+poli+mono)
+    sat = pct_fat*sat/subtotal; poli = pct_fat*poli/subtotal; mono = pct_fat - sat - poli
+    g_sat  = round((kcal*sat /100)/9,1)
+    g_poli = round((kcal*poli/100)/9,1)
+    g_mono = round((kcal*mono/100)/9,1)
     return {
-        "porc": {"prot": p_prot, "grasa": p_grasa, "cho": p_cho},
-        "g": {"prot": g_prot, "grasa": g_grasa, "cho": g_cho, "cho_c": g_cho_complejos, "cho_s": g_cho_simples},
-        "gkg": {"prot": gkg_prot, "cho": gkg_cho}
+        "pct":{"prot":pct_prot,"fat":pct_fat,"cho":pct_cho},
+        "g":{"prot":g_prot,"fat":g_fat,"cho":g_cho,"cho_c":g_cho_c,"cho_s":g_cho_s,"sat":g_sat,"poli":g_poli,"mono":g_mono},
+        "gkg":{"prot":gkg_prot,"cho":gkg_cho}
     }
 
-def grasas_detalle(kcal: int, p_grasa_total: int, p_sat: int, p_poli: int, p_mono: int):
-    subtotal = p_sat + p_poli + p_mono
-    if subtotal == 0:  # evitar div/0
-        p_sat, p_poli, p_mono = 30, 35, 35
-        subtotal = 100
-    # Reparto dentro del % de grasa total
-    p_sat  = p_grasa_total * p_sat  / 100
-    p_poli = p_grasa_total * p_poli / 100
-    p_mono = p_grasa_total - p_sat - p_poli
+def sodium_convert(target_mg, current_mg):
+    rem = max(0, target_mg - current_mg)
+    salt_g = round(rem/400.0,2)  # 400 mg Na ≈ 1 g NaCl
+    tsp = round(salt_g/5.0,2)    # 1 cdta ≈ 5 g
+    return {"remaining_mg":rem,"salt_g":salt_g,"tsp":tsp}
 
-    g_sat  = round((kcal * p_sat  / 100) / 9, 1)
-    g_poli = round((kcal * p_poli / 100) / 9, 1)
-    g_mono = round((kcal * p_mono / 100) / 9, 1)
-    return {
-        "sat": g_sat, "poli": g_poli, "mono": g_mono,
-        "p_sat": round(p_sat,1), "p_poli": round(p_poli,1), "p_mono": round(p_mono,1)
-    }
+def exchanges_from_kcal(k):
+    # heurística base (ajustable a tus tablas)
+    f = max(1.0, min(2.2, k/2000))
+    base = {"Vegetales":4,"Frutas":2,"Cereales":5,"Leguminosas":1,"Lácteos descremados":1,"Proteínas magras":4,"Grasas saludables":4}
+    return {g:int(round(v*f)) for g,v in base.items()}
 
-def sodio_conversion(mg_objetivo: int, mg_consumido: int):
-    rem = max(0, mg_objetivo - mg_consumido)
-    g_nacl = round(rem / 400.0, 2)      # 400 mg Na ≈ 1 g NaCl
-    cdtas = round(g_nacl / 5.0, 2)      # 1 cdta ≈ 5 g
-    return {"remanente_mg_na": rem, "g_nacl": g_nacl, "cdtas": cdtas}
+def distribute_by_meal(daily_exchanges):
+    split = {"Desayuno":0.25,"Merienda AM":0.10,"Almuerzo":0.30,"Merienda PM":0.10,"Cena":0.25}
+    plan = {m:{} for m in split}
+    for g, total in daily_exchanges.items():
+        for m, frac in split.items():
+            plan[m][g] = round(total*frac,1)
+    return plan
 
-# ====== Sidebar (form para evitar reruns en móvil) ======
+# =========================
+# IMPORTAR EXCEL DE INTERCAMBIOS (opcional)
+# =========================
+def load_catalog_from_excel(file) -> dict:
+    """
+    Columnas esperadas: Grupo, Nombre, kcal, CHO, PRO, FAT, Porcion, Equivalencia, Comentario
+    Retorna dict con promedios por 'Grupo' (para sustituir EXCHANGES si quieres).
+    """
+    try:
+        df = pd.read_excel(file)
+        df.columns = [c.strip().lower() for c in df.columns]
+        cat = {}
+        for g, sub in df.groupby("grupo"):
+            s = sub[["kcal","cho","pro","fat"]].astype(float).mean().to_dict()
+            cat[g] = {
+                "kcal": round(s.get("kcal",0),1),
+                "CHO": round(s.get("cho",0),1),
+                "PRO": round(s.get("pro",0),1),
+                "FAT": round(s.get("fat",0),1),
+                "portion": str(sub["porcion"].iloc[0]) if "porcion" in sub else "",
+                "examples": list(sub["nombre"][:5]) if "nombre" in sub else []
+            }
+        return cat
+    except Exception:
+        return {}
+
+# =========================
+# SIDEBAR – Datos y Configuración
+# =========================
 with st.sidebar:
     with st.form("datos"):
         st.subheader("Paciente")
@@ -126,7 +186,7 @@ with st.sidebar:
         edad = st.number_input("Edad (años)", 1, 120, 30)
         talla_cm = st.number_input("Talla (cm)", 100, 230, 165)
         peso = st.number_input("Peso (kg)", 30.0, 300.0, 75.0, step=0.1)
-        act = st.selectbox("Actividad", list(ACT_FACTORS.keys()), index=1)
+        actividad = st.selectbox("Actividad", list(ACTIVITY.keys()), index=1)
         objetivo = st.selectbox("Objetivo", ["Pérdida de peso","Mantenimiento","Ganancia (magro)"], index=0)
 
         st.markdown("---")
@@ -135,243 +195,252 @@ with st.sidebar:
         insulina = st.number_input("Insulina (µUI/mL)", 0.0, 2000.0, 0.0, step=0.1)
         hba1c = st.number_input("HbA1c (%)", 0.0, 20.0, 0.0, step=0.1)
 
+        st.markdown("---")
+        st.subheader("Catálogo de intercambios")
+        xls = st.file_uploader("Cargar Excel de intercambios (opcional)", type=["xlsx","xls"])
+
         submitted = st.form_submit_button("Aplicar cambios")
 
-# ====== Cálculos base ======
+# Sustituir catálogo si suben Excel
+if xls is not None:
+    newcat = load_catalog_from_excel(xls)
+    if newcat: EXCHANGES.update(newcat)
+
+# =========================
+# CÁLCULOS BASE
+# =========================
 tmb = max(800, round(mifflin_st_jeor(sexo, peso, talla_cm, edad)))
-get = max(tmb, round(tmb * ACT_FACTORS.get(act, 1.2)))
-kcal = kcal_objetivo(get, objetivo)
-imc = round(peso / (talla_cm/100)**2, 2)
+tee = tee_from_tmb(tmb, actividad)
+kcal = kcal_target(tee, objetivo)
+imc = bmi(peso, talla_cm)
 homa = homa_ir(glicemia, insulina)
 
 labs_txt = f"Glicemia: {glicemia} mg/dL; Insulina: {insulina} µUI/mL; HbA1c: {hba1c}%"
 if homa is not None:
-    labs_txt += f"; HOMA-IR: {round(homa,2)}"
+    labs_txt += f"; HOMA-IR: {homa}"
 
 st.subheader("Resumen antropométrico y de cálculo")
 st.markdown(
     f"""
     <div class='box'>
-    <b>IMC:</b> {imc} kg/m² · <b>TMB:</b> {tmb} kcal · <b>GET:</b> {get} kcal · <b>Meta:</b> {kcal} kcal
-    <br><span style='color:#555'>{labs_txt}</span>
+      <b>IMC:</b> {imc} kg/m² · <b>TMB:</b> {tmb} kcal · <b>GET:</b> {tee} kcal · <b>Meta:</b> {kcal} kcal
+      <br><span class='soft'>{labs_txt}</span>
     </div>
-    """, unsafe_allow_html=True
+    """,
+    unsafe_allow_html=True
 )
 
-# ====== Requerimientos (como en tus plantillas) ======
-st.subheader("Requerimientos nutricionales (formato de tus plantillas)")
+# =========================
+# REQUERIMIENTOS (como en tus plantillas)
+# =========================
+st.subheader("Requerimientos nutricionales")
 c1, c2 = st.columns(2)
 with c1:
-    p_prot = st.slider("Proteínas (%)", 10, 35, 20)
-    p_grasa = st.slider("Grasas totales (%)", 20, 40, 30)
-    p_cho = 100 - p_prot - p_grasa
-    st.info(f"Carbohidratos (%) se ajusta a: **{p_cho}%**")
+    pct_prot = st.slider("Proteínas (%)", 10, 35, 20)
+    pct_fat  = st.slider("Grasas totales (%)", 20, 40, 30)
+    pct_cho  = 100 - pct_prot - pct_fat
+    st.info(f"Carbohidratos (%) se ajusta a: **{pct_cho}%**")
 with c2:
-    p_sat = st.slider("De la grasa total → Saturadas (%)", 0, 15, 10)
-    p_poli = st.slider("De la grasa total → Poliinsat. (%)", 5, 60, 35)
-    p_mono = max(0, 100 - p_sat - p_poli)
-    st.info(f"Monoinsat. (%) se ajusta a: **{p_mono}%**")
+    sat = st.slider("De la grasa total → Saturadas (%)", 0, 15, 10)
+    poli = st.slider("De la grasa total → Poliinsat. (%)", 5, 60, 35)
+    mono = max(0, 100 - sat - poli)
+    st.info(f"Monoinsat. (%) se ajusta a: **{mono}%**")
+pct_cho_complex = st.slider("Dentro de CHO → Complejos (%)", 50, 100, 85)
 
-p_cho_complejo = st.slider("Dentro de los CHO → Complejos (%)", 50, 100, 85)
-
-mac = macros_from_percent(kcal, p_prot, p_grasa, p_cho, peso, p_cho_complejo)
-# >>> FIX del error de paréntesis y key:
-g_grasas_det = grasas_detalle(kcal, mac["porc"]["grasa"], p_sat, p_poli, p_mono)
+mac = macros(kcal, pct_prot, pct_fat, pct_cho, peso, pct_cho_complex, fat_split=(sat, poli, mono))
 
 st.markdown("**Cálculo automático:**")
 st.write(
-    f"- Proteínas: {mac['porc']['prot']}% → **{mac['g']['prot']} g**  (≈ **{mac['gkg']['prot']} g/kg**)\n"
-    f"- Grasas totales: {mac['porc']['grasa']}% → **{mac['g']['grasa']} g**  "
-    f"• Sat: **{g_grasas_det['sat']} g** • Poli: **{g_grasas_det['poli']} g** • Mono: **{g_grasas_det['mono']} g**\n"
-    f"- CHO: {mac['porc']['cho']}% → **{mac['g']['cho']} g**  "
+    f"- Proteínas: {mac['pct']['prot']}% → **{mac['g']['prot']} g**  (≈ **{mac['gkg']['prot']} g/kg**)\n"
+    f"- Grasas totales: {mac['pct']['fat']}% → **{mac['g']['fat']} g**  "
+    f"• Sat: **{mac['g']['sat']} g** • Poli: **{mac['g']['poli']} g** • Mono: **{mac['g']['mono']} g**\n"
+    f"- CHO: {mac['pct']['cho']}% → **{mac['g']['cho']} g**  "
     f"• Complejos: **{mac['g']['cho_c']} g** • Simples: **{mac['g']['cho_s']} g**"
 )
 
-# ====== Conversión de Sodio ======
-st.subheader("Conversión de sodio (como en tu plantilla)")
+# =========================
+# SODIO
+# =========================
+st.subheader("Conversión de sodio")
 cna1, cna2, cna3 = st.columns(3)
 with cna1:
     na_obj = st.number_input("Objetivo (mg Na/día)", 500, 5000, 2300, step=50)
 with cna2:
     na_cons = st.number_input("Consumido (mg Na/día)", 0, 5000, 900, step=10)
-calc_na = sodio_conversion(na_obj, na_cons)
+na_calc = sodium_convert(na_obj, na_cons)
 with cna3:
-    st.metric("Na remanente (mg)", calc_na["remanente_mg_na"])
-st.write(f"**Equivalencia:** 1 mEq Na = 23 mg Na · 400 mg Na ≈ 1 g NaCl**")
-st.write(f"**Sal (NaCl):** {calc_na['g_nacl']} g  →  **{calc_na['cdtas']} cdtas** (1 cdta ~ 5 g)")
+    st.metric("Na remanente (mg)", na_calc["remaining_mg"])
+st.write(f"**Equivalencia:** 400 mg Na ≈ 1 g NaCl; 1 cdta ≈ 5 g → **{na_calc['salt_g']} g NaCl ({na_calc['tsp']} cdtas)**")
 
-# ====== Historia dietética & ADIME (inputs clave) ======
+# =========================
+# HISTORIA & ADIME
+# =========================
 st.subheader("Historia dietética y ADIME")
 motivo = st.text_area("Motivo de consulta / Resumen del caso")
 diagnosticos_medicos = st.text_area("Diagnósticos médicos actuales")
 tratamiento_medico = st.text_area("Tratamiento médico")
-tratamiento_nutri = st.text_area("Tratamiento nutricional")
+tratamiento_nutri = st.text_area("Tratamiento nutricional previo/actual")
 objetivos_nutri = st.text_area("Objetivos nutricionales")
-recordatorio_24h = st.text_area("Recordatorio 24 h (Preparación / Ingredientes / Cantidad por comidas)", height=150)
-analisis_cualitativo = st.text_area("Análisis cualitativo (conductas, horarios, preferencia/rechazos)")
-prescripcion_dietetica = st.text_area("Prescripción Dietética")
+recordatorio_24h = st.text_area("Recordatorio 24 h (Preparación / Ingredientes / Cantidad por comidas)", height=140)
+analisis_cualitativo = st.text_area("Análisis cualitativo (conductas, horarios, preferencias/rechazos)")
+prescripcion_dietetica = st.text_area("Prescripción Dietética (resumen operativo)")
 sugerencias = st.text_area("Sugerencias y comentarios")
+dx_pes = st.text_area("Diagnóstico(s) PES (NCPT)", placeholder="Problema relacionado con ... evidenciado por ...")
 
-# ====== Export .docx según Plantillas (Primera vez / Control) ======
-def build_docx_primera_vez(payload: dict) -> BytesIO:
+# =========================
+# INTERCAMBIOS: Sugerencia y distribución
+# =========================
+st.subheader("Plan por Intercambios (sugerido)")
+daily = exchanges_from_kcal(kcal)
+by_meal = distribute_by_meal(daily)
+
+df_plan = pd.DataFrame({
+    "Grupo": list(daily.keys()),
+    "Raciones/día": list(daily.values()),
+    "kcal/rac": [EXCHANGES[g]["kcal"] if g in EXCHANGES else "" for g in daily.keys()],
+    "Porción": [EXCHANGES[g]["portion"] if g in EXCHANGES else "" for g in daily.keys()],
+    "Ejemplos": [", ".join(EXCHANGES[g]["examples"]) if g in EXCHANGES else "" for g in daily.keys()],
+})
+st.dataframe(df_plan, use_container_width=True, height=320)
+
+df_meals = []
+for m, grupos in by_meal.items():
+    r = {"Tiempo": m}
+    r.update(grupos)
+    df_meals.append(r)
+st.dataframe(pd.DataFrame(df_meals), use_container_width=True, height=300)
+
+# =========================
+# EXPORTES: DOCX + FHIR + MD
+# =========================
+def build_docx(kind, payload):
+    if not DOCX_AVAILABLE: return None
     doc = Document()
     style = doc.styles["Normal"]; style.font.name = "Calibri"; style.font.size = Pt(11)
-
-    doc.add_heading("HISTORIA CLÍNICA NUTRICIONAL – PRIMERA VEZ", level=1)
-    doc.add_paragraph(f"Historia Nº: ____________     Fecha de evaluación: {payload['fecha']}")
-    doc.add_heading("DATOS PERSONALES:", level=2)
-    doc.add_paragraph(f"Nombre y Apellido: {payload['paciente']}")
-    doc.add_paragraph(f"CI: V-__________      Edad: {payload['edad']} años      Sexo: {payload['sexo']}")
-    doc.add_paragraph("Dirección: __________________________   Teléfono: __________   Correo: __________")
-
-    doc.add_heading("MOTIVO DE CONSULTA:", level=2); doc.add_paragraph(payload["motivo"])
-    doc.add_heading("RESUMEN DEL CASO:", level=2); doc.add_paragraph(payload["resumen"])
-    doc.add_heading("DIAGNÓSTICOS MÉDICOS ACTUALES:", level=2); doc.add_paragraph(payload["dx_med"])
-    doc.add_heading("TRATAMIENTO ACTUAL:", level=2)
-    doc.add_paragraph(f"Médico: {payload['tto_med']}"); doc.add_paragraph(f"Nutricional: {payload['tto_nutri']}")
-
-    doc.add_heading("Objetivos nutricionales:", level=2); doc.add_paragraph(payload["obj_nutri"])
-
-    doc.add_heading("RECORDATORIO DE 24 HORAS", level=2)
-    table = doc.add_table(rows=1, cols=3); hdr = table.rows[0].cells
-    hdr[0].text = "Preparación"; hdr[1].text = "Ingredientes"; hdr[2].text = "Cantidad"
-    table.add_row().cells[0].text = payload["r24h"]
-    doc.add_paragraph("Aporte Calórico aproximado: ____ Kcal")
-    doc.add_paragraph("Total PAVB: ____ g   |  Total CHO complejos: ____ g   |  Total CHO simples: ____ g   |  Total Grasas: ____ g")
-
-    doc.add_heading("ANÁLISIS CUALITATIVO:", level=2); doc.add_paragraph(payload["analisis"])
-
-    doc.add_heading("DATOS ANTROPOMÉTRICOS:", level=2)
-    doc.add_paragraph(f"Peso Actual: {payload['peso']} kg     Talla: {payload['talla_m']} m     IMC: {payload['imc']} kg/m²")
-    doc.add_paragraph("Circ. Cintura: ___ cm    Circ. Cadera: ___ cm    ICC: ___    %Grasa: ___")
-
-    doc.add_heading("LABORATORIOS:", level=2); doc.add_paragraph(payload["labs"])
-
-    doc.add_heading("DIAGNÓSTICO NUTRICIONAL:", level=2); doc.add_paragraph("________________________________________")
-
-    doc.add_heading("REQUERIMIENTOS NUTRICIONALES:", level=2)
-    doc.add_paragraph(f"Energía: {payload['kcal']} Kcal/día   |   Kcal/Kg: {payload['kcal_kg']}")
-    doc.add_paragraph(f"Proteínas: {payload['p_prot']}%  → {payload['g_prot']} g  ( {payload['gkg_prot']} g/kg )")
-    doc.add_paragraph(f"Grasas totales: {payload['p_grasa']}% → {payload['g_grasa']} g")
-    doc.add_paragraph(f"  - Saturadas: {payload['g_sat']} g   - Poli: {payload['g_poli']} g   - Mono: {payload['g_mono']} g")
-    doc.add_paragraph(f"Carbohidratos (totales): {payload['p_cho']}% → {payload['g_cho']} g")
-    doc.add_paragraph(f"  - CHO complejos: {payload['g_cho_c']} g   - CHO simples: {payload['g_cho_s']} g")
-
-    doc.add_heading("PRESCRIPCIÓN DIETÉTICA:", level=2); doc.add_paragraph(payload["prescripcion"])
-
-    doc.add_heading("CONVERSIÓN DE SODIO:", level=2)
-    doc.add_paragraph("1 mEq Na ----- 23 mg Na")
-    doc.add_paragraph(f"{payload['na_obj']} mg Na – {payload['na_cons']} mg Na = {payload['na_rem']} mg Na")
-    doc.add_paragraph("400 mg Na ----- 1 g NaCl")
-    doc.add_paragraph(f"{payload['na_rem']} mg Na ----- {payload['g_nacl']} g NaCl  (≈ {payload['cdtas']} cdtas de sal)")
-    doc.add_paragraph("Distribuir la sal diaria en todas las preparaciones del día.")
-
-    doc.add_heading("Sugerencias y comentarios:", level=2); doc.add_paragraph(payload["sugerencias"])
-
+    doc.add_heading(f"HISTORIA CLÍNICA NUTRICIONAL – {kind.upper()}", level=1)
+    doc.add_paragraph(f"Fecha: {payload['fecha']}   Profesional: {payload['profesional']}   Paciente: {payload['paciente']}")
+    # A
+    doc.add_heading("Evaluación (A)", level=2)
+    doc.add_paragraph(payload["evaluation"])
+    # D
+    doc.add_heading("Diagnóstico (D)", level=2)
+    if payload["pes_list"]:
+        for pes in payload["pes_list"]:
+            doc.add_paragraph(f"• {pes}")
+    else:
+        doc.add_paragraph("—")
+    # I
+    doc.add_heading("Intervención (I)", level=2)
+    doc.add_paragraph(payload["prescription"])
+    # ME
+    doc.add_heading("Monitoreo/Evaluación (ME)", level=2)
+    doc.add_paragraph(payload["monitoring"])
+    # Requerimientos
+    doc.add_heading("Requerimientos", level=2)
+    m = payload["macros"]
+    doc.add_paragraph(f"Energía: {payload['kcal']} kcal/d  ({payload['kcal_kg']} kcal/kg)")
+    doc.add_paragraph(f"Proteínas: {m['pct']['prot']}% → {m['g']['prot']} g ({payload['gkg_prot']} g/kg)")
+    doc.add_paragraph(f"Grasas: {m['pct']['fat']}% → {m['g']['fat']} g (Sat {m['g']['sat']} g, Poli {m['g']['poli']} g, Mono {m['g']['mono']} g)")
+    doc.add_paragraph(f"CHO: {m['pct']['cho']}% → {m['g']['cho']} g (Complejos {m['g']['cho_c']} g, Simples {m['g']['cho_s']} g)")
+    # Sodio
+    s = payload["sodium"]
+    doc.add_paragraph(f"Sodio objetivo: {s['target_mg']} mg; Consumido: {s['current_mg']} mg; Remanente: {s['remaining_mg']} mg")
+    doc.add_paragraph(f"≈ {s['salt_g']} g NaCl ( {s['tsp']} cdtas )")
     bio = BytesIO(); doc.save(bio); bio.seek(0); return bio
 
-def build_docx_control(payload: dict) -> BytesIO:
-    doc = Document()
-    style = doc.styles["Normal"]; style.font.name = "Calibri"; style.font.size = Pt(11)
+def fhir_nutrition_order(payload):
+    return {
+      "resourceType":"NutritionOrder",
+      "status":"active","intent":"order","dateTime": payload["fecha"],
+      "patient":{"display": payload["paciente"]},
+      "orderer":{"display": payload["profesional"]},
+      "oralDiet":{
+        "type":[{"text": payload["diet_type"]}],
+        "nutrient":[
+          {"modifier":{"text":"Energy"}, "amount":{"value": payload["kcal"], "unit":"kcal/d"}},
+          {"modifier":{"text":"Protein"}, "amount":{"value": payload["macros"]["g"]["prot"], "unit":"g/d"}},
+          {"modifier":{"text":"Fat"}, "amount":{"value": payload["macros"]["g"]["fat"], "unit":"g/d"}},
+          {"modifier":{"text":"Carbohydrate"}, "amount":{"value": payload["macros"]["g"]["cho"], "unit":"g/d"}}
+        ],
+        "texture":[{"modifier":{"text": payload.get("texture","Normal")}}],
+        "excludeFoodModifier":[{"text": e} for e in payload.get("exclusions",[])]
+      }
+    }
 
-    doc.add_heading("HISTORIA CLÍNICA NUTRICIONAL – CONTROL", level=1)
-    doc.add_paragraph(f"Historia Nº: ____________     Fecha de evaluación: {payload['fecha']}")
-    doc.add_heading("DATOS PERSONALES:", level=2)
-    doc.add_paragraph(f"Nombre y Apellido: {payload['paciente']}")
-    doc.add_paragraph(f"Edad: {payload['edad']} años      Sexo: {payload['sexo']}")
+def fhir_nutrition_intake(payload):
+    return {
+      "resourceType":"NutritionIntake","status":"completed","occurrenceDateTime": payload["fecha"],
+      "subject":{"display": payload["paciente"]},
+      "consumedItem":[{"type":{"text":"Plan prescrito"},
+                       "nutrient":[
+                         {"item":{"text":"Protein"}, "amount":{"value": payload["macros"]["g"]["prot"], "unit":"g"}},
+                         {"item":{"text":"Fat"}, "amount":{"value": payload["macros"]["g"]["fat"], "unit":"g"}},
+                         {"item":{"text":"Carbohydrate"}, "amount":{"value": payload["macros"]["g"]["cho"], "unit":"g"}}
+                       ],
+                       "amount":{"value": payload["kcal"], "unit":"kcal"}}]
+    }
 
-    doc.add_heading("RECORDATORIO DE 24 HORAS", level=2)
-    table = doc.add_table(rows=1, cols=3); hdr = table.rows[0].cells
-    hdr[0].text = "Preparación"; hdr[1].text = "Ingredientes"; hdr[2].text = "Cantidad"
-    table.add_row().cells[0].text = payload["r24h"]
-    doc.add_paragraph("Aporte Calórico aproximado: ____ Kcal")
-    doc.add_paragraph("Total PAVB: ____ g   |  Total CHO complejos: ____ g   |  Total CHO simples: ____ g   |  Total Grasas: ____ g")
-
-    doc.add_heading("LABORATORIOS:", level=2); doc.add_paragraph(payload["labs"])
-
-    doc.add_heading("Evaluación antropométrica:", level=2)
-    doc.add_paragraph(f"Peso Actual: {payload['peso']} kg   |   Talla: {payload['talla_m']} m   |   IMC: {payload['imc']} kg/m²")
-
-    doc.add_heading("Requerimientos Nutricionales:", level=2)
-    doc.add_paragraph(f"Energía {payload['kcal']} Kcal/día   |   Kcal/Kg {payload['kcal_kg']}")
-    doc.add_paragraph(f"Proteínas {payload['p_prot']}% → {payload['g_prot']} g  ({payload['gkg_prot']} g/kg)")
-    doc.add_paragraph(f"Grasas totales {payload['p_grasa']}% → {payload['g_grasa']} g  (Sat {payload['g_sat']} g, Poli {payload['g_poli']} g, Mono {payload['g_mono']} g)")
-    doc.add_paragraph(f"CHO {payload['p_cho']}% → {payload['g_cho']} g  (Complejos {payload['g_cho_c']} g, Simples {payload['g_cho_s']} g)")
-
-    doc.add_heading("Diagnóstico nutricional:", level=2); doc.add_paragraph("_____________________________")
-    doc.add_heading("Objetivos nutricionales planteados:", level=2); doc.add_paragraph(payload["obj_nutri"])
-    doc.add_paragraph("Objetivo | En proceso | Resuelto")
-    doc.add_paragraph("________ | __________ | ________")
-
-    doc.add_heading("Prescripción Dietética:", level=2); doc.add_paragraph(payload["prescripcion"])
-    doc.add_heading("Sugerencias y comentarios:", level=2); doc.add_paragraph(payload["sugerencias"])
-
-    bio = BytesIO(); doc.save(bio); bio.seek(0); return bio
-
-# ====== Payload común para export ======
-payload = {
+# Payload común para exportes
+common = {
     "fecha": date.today().isoformat(),
-    "paciente": st.session_state.get("paciente", "") or "—",
-    "edad": int(edad),
-    "sexo": sexo,
-    "peso": float(peso),
-    "talla_m": round(talla_cm/100, 2),
-    "imc": imc,
-    "kcal": kcal,
-    "kcal_kg": round(kcal / peso, 2) if peso else 0.0,
-    "p_prot": mac["porc"]["prot"], "p_grasa": mac["porc"]["grasa"], "p_cho": mac["porc"]["cho"],
-    "g_prot": mac["g"]["prot"], "gkg_prot": mac["gkg"]["prot"],
-    "g_grasa": mac["g"]["grasa"],
-    "g_sat": g_grasas_det["sat"], "g_poli": g_grasas_det["poli"], "g_mono": g_grasas_det["mono"],
-    "g_cho": mac["g"]["cho"], "g_cho_c": mac["g"]["cho_c"], "g_cho_s": mac["g"]["cho_s"],
-    "labs": labs_txt,
-    "motivo": motivo,
-    "resumen": motivo,  # si quieres separar, agrega otro campo para "Resumen"
-    "dx_med": diagnosticos_medicos,
-    "tto_med": tratamiento_medico,
-    "tto_nutri": tratamiento_nutri,
-    "obj_nutri": objetivos_nutri,
-    "r24h": recordatorio_24h,
-    "analisis": analisis_cualitativo,
-    "prescripcion": prescripcion_dietetica,
-    "sugerencias": sugerencias,
-    "na_obj": na_obj,
-    "na_cons": na_cons,
-    "na_rem": calc_na["remanente_mg_na"],
-    "g_nacl": calc_na["g_nacl"],
-    "cdtas": calc_na["cdtas"],
+    "paciente": paciente or "—",
+    "profesional": BRAND_NAME,
+    "kcal": kcal, "kcal_kg": round(kcal/peso,2) if peso else 0.0,
+    "gkg_prot": mac["gkg"]["prot"],
+    "macros": mac,
+    "sodium": {"target_mg": na_obj, "current_mg": na_cons, **na_calc}
 }
 
+doc_payload = {
+    **common,
+    "diet_type": "Personalizada",
+    "texture": "Normal",
+    "evaluation": f"IMC {imc} kg/m²; TMB {tmb} kcal; GET {tee} kcal; "
+                  f"Labs: {labs_txt}. Dieta habitual: {recordatorio_24h}",
+    "pes_list": [p.strip() for p in dx_pes.split("\n") if p.strip()],
+    "prescription": prescripcion_dietetica or "Plan por intercambios + educación nutricional.",
+    "monitoring": "Control en 2–4 semanas; métricas: peso, cintura, adherencia; labs según caso.",
+    "exclusions": []
+}
+
+# UI Exportes
 st.markdown("---")
-tipo_doc = st.radio("Tipo de documento a generar", ["Primera vez", "Control"], horizontal=True)
-col1, col2 = st.columns(2)
+colA, colB, colC = st.columns(3)
 
-with col1:
-    md = [
-        f"# {BRAND_NAME} · Informe Nutricional ({tipo_doc})",
-        f"**Paciente:** {payload['paciente']}  |  **Fecha:** {payload['fecha']}",
-        f"**IMC:** {payload['imc']} kg/m²  ·  **TMB:** {tmb}  ·  **GET:** {get}  ·  **Meta:** {kcal} kcal",
+with colA:
+    md_lines = [
+        f"# {BRAND_NAME} · Nota ADIME",
+        f"**Paciente:** {common['paciente']}  |  **Fecha:** {common['fecha']}",
+        f"**IMC:** {imc} kg/m²  ·  **TMB:** {tmb}  ·  **GET:** {tee}  ·  **Meta:** {kcal} kcal",
         "## Requerimientos",
-        f"- Energía: {payload['kcal']} Kcal/d  ({payload['kcal_kg']} Kcal/kg)",
-        f"- Proteínas: {payload['p_prot']}% → {payload['g_prot']} g  ({payload['gkg_prot']} g/kg)",
-        f"- Grasas: {payload['p_grasa']}% → {payload['g_grasa']} g  (Sat {payload['g_sat']} g, Poli {payload['g_poli']} g, Mono {payload['g_mono']} g)",
-        f"- CHO: {payload['p_cho']}% → {payload['g_cho']} g  (Complejos {payload['g_cho_c']} g, Simples {payload['g_cho_s']} g)"
+        f"- Energía: {common['kcal']} Kcal/d  ({common['kcal_kg']} Kcal/kg)",
+        f"- Proteínas: {mac['pct']['prot']}% → {mac['g']['prot']} g  ({common['gkg_prot']} g/kg)",
+        f"- Grasas: {mac['pct']['fat']}% → {mac['g']['fat']} g  (Sat {mac['g']['sat']} g, Poli {mac['g']['poli']} g, Mono {mac['g']['mono']} g)",
+        f"- CHO: {mac['pct']['cho']}% → {mac['g']['cho']} g  (Complejos {mac['g']['cho_c']} g, Simples {mac['g']['cho_s']} g)",
+        "## ADIME",
+        f"**A:** {doc_payload['evaluation']}",
+        f"**D:** {', '.join(doc_payload['pes_list']) if doc_payload['pes_list'] else '—'}",
+        f"**I:** {doc_payload['prescription']}",
+        f"**ME:** {doc_payload['monitoring']}"
     ]
-    st.download_button("⬇️ Exportar Markdown", "\n".join(md), file_name="informe_nutritionsays.md")
+    st.download_button("⬇️ Exportar Markdown", "\n".join(md_lines), file_name="adime_nutritionsays.md")
 
-with col2:
+with colB:
     if DOCX_AVAILABLE:
-        if tipo_doc == "Primera vez":
-            bio = build_docx_primera_vez(payload)
-            fname = "historia_clinica_primera_vez_nutritionsays.docx"
-        else:
-            bio = build_docx_control(payload)
-            fname = "historia_clinica_control_nutritionsays.docx"
+        bio = build_docx("Inicial/Control", doc_payload)
         st.download_button(
             "⬇️ Exportar DOCX",
             data=bio,
-            file_name=fname,
+            file_name="nota_clinica_nutritionsays.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
     else:
-        st.info("Exportar a DOCX no disponible: verifica 'python-docx' y 'lxml' en requirements.txt.")
+        st.info("Para DOCX instala 'python-docx' y 'lxml' (revisar requirements.txt).")
+
+with colC:
+    order_json = fhir_nutrition_order(doc_payload)
+    intake_json = fhir_nutrition_intake(common)
+    with st.expander("🔎 Ver JSON FHIR (NutritionOrder / NutritionIntake)"):
+        st.json({"NutritionOrder": order_json, "NutritionIntake": intake_json})
+
+st.caption("Este software es apoyo clínico para profesionales. Ajusta a juicio clínico y guías locales. © " + BRAND_NAME)
