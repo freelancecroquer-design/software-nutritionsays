@@ -1,0 +1,68 @@
+{
+  "patient": {
+    "id": "string",
+    "name": "string",
+    "sex_at_birth": "Femenino|Masculino|Intersexual|Otro",
+    "dob": "YYYY-MM-DD",
+    "contact": {"phone":"string","email":"string","address":"string"},
+    "emergency_contact":{"name":"string","phone":"string","relation":"string"},
+    "consents":{"share_data":true,"telehealth":true}
+  },
+  "encounter": {
+    "date":"YYYY-MM-DD",
+    "type":"Inicial|Control",
+    "reason":"string",
+    "professional":"@nutritionsays",
+    "context":{"setting":"Presencial|Teleconsulta","episode_id":"string"}
+  },
+  "assessment": {
+    "diet_history":{
+      "r24h":"string",
+      "ffq":"string",
+      "pattern":"string",
+      "supplements":["string"]
+    },
+    "preferences":{"likes":["string"],"dislikes":["string"],"allergies":["string"],"intolerances":["string"],"religious":["string"]},
+    "anthropometrics":{
+      "weight_kg":0.0,"height_cm":0.0,"bmi":0.0,
+      "waist_cm":0.0,"hip_cm":0.0,"skinfolds":{"triceps":0.0,"subscapular":0.0},
+      "body_comp":{"fat_pct":0.0,"muscle_area":"string"},
+      "history":{"weight_usual":0.0,"weight_min":0.0,"weight_max":0.0}
+    },
+    "biochem":{
+      "glucose_mg_dl":0.0,"hba1c_pct":0.0,"insulin_uU_ml":0.0,
+      "lipids":{"tc":0.0,"hdl":0.0,"ldl":0.0,"tg":0.0},
+      "renal":{"creat":0.0,"uacr":0.0},"hepatic":{"alt":0.0,"ast":0.0},
+      "iron":{"hb":0.0,"ferritin":0.0}
+    },
+    "nfpe":{"fat_loss":"leve|moderada|severa|NA","muscle_wasting":"leve|moderada|severa|NA","edema":"no|si|grado","deficiency_signs":["string"]},
+    "lifestyle":{"pa_level":"Reposo|Ligera|Moderada|Alta","sleep_h":0,"alcohol":"string","tobacco":"string","barriers":"string"},
+    "social":{"food_security":"adecuada|riesgo|insuficiente","budget":"string","kitchen_access":"si|no"},
+    "med_history":{"dx":["DM2","HTA","Dislipidemia","Obesidad","Otros"],"surgeries":["string"],"meds":["string"]}
+  },
+  "diagnosis": {
+    "ncpt_codes":[{"code":"string","term":"string","status":"active|resolved"}],
+    "pes_statements":["string"]
+  },
+  "requirements": {
+    "tmb":0,"tee":0,"kcal_target":0,"kcal_per_kg":0,
+    "macros":{"protein":{"pct":0,"g":0,"g_per_kg":0},"fat":{"pct":0,"g":0,"sat_g":0,"poly_g":0,"mono_g":0},"cho":{"pct":0,"g":0,"complex_g":0,"simple_g":0}},
+    "fluids_ml":0,
+    "sodium":{"target_mg":2300,"current_mg":0,"remaining_mg":0,"salt_g":0,"tsp":0}
+  },
+  "exchange_plan": {
+    "catalog_version":"INN-VE-2024",
+    "daily_exchanges":{"Vegetales":0,"Frutas":0,"Cereales":0,"Leguminosas":0,"Lácteos":0,"Proteínas magras":0,"Grasas":0},
+    "by_meal": {"Desayuno":{},"Merienda AM":{},"Almuerzo":{},"Merienda PM":{},"Cena":{}}
+  },
+  "intervention": {
+    "nutrition_order":{"diet_type":"DASH|DM2|Hipocalórica|Personalizada","texture":"Normal|Blanda|Líquida","exclusions":["string"],"supplements":["string"]},
+    "education":{"topics":["etiquetado","plato saludable","carbohidratos complejos"]},
+    "goals":[{"goal":"string","metric":"% adherencia|peso|HbA1c","target":"string","due":"YYYY-MM-DD"}]
+  },
+  "monitoring": {
+    "metrics":{"weight":"kg","waist":"cm","hba1c":"%","adherence":"%"},
+    "schedule":"2-4 semanas",
+    "notes":"string"
+  }
+}
