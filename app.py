@@ -5,6 +5,7 @@ import math
 import streamlit as st
 import pandas as pd
 
+# DOCX opcional
 try:
     from docx import Document
     from docx.shared import Pt
@@ -20,14 +21,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# =================== CSS: arreglos de legibilidad y toggle ===================
+# =================== CSS + botón flotante reabrir sidebar ===================
 st.markdown("""
 <style>
-/* ---- Base ---- */
+/* Base claro */
 .stApp, .block-container { background:#ffffff !important; color:#111 !important; }
 h1,h2,h3,h4,h5, p, span, label, div, li, th, td { color:#111 !important; }
 
-/* ---- Sidebar oscuro ---- */
+/* Sidebar oscuro */
 section[data-testid="stSidebar"] { background:#1e1e2a !important; border-right:1px solid #141421; }
 section[data-testid="stSidebar"] * { color:#f5f6fb !important; }
 section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] .stMarkdown p { color:#e6def7 !important; }
@@ -38,34 +39,41 @@ section[data-testid="stSidebar"] input::placeholder, section[data-testid="stSide
   color:#cbd0ff !important; opacity:.85;
 }
 
-/* ---- SELECTS legibles (control) ---- */
+/* SELECTS (control) — fuerza blanco en textos del control y placeholders */
 section[data-testid="stSidebar"] div[data-baseweb="select"]>div {
   color:#ffffff !important; background:#111223 !important; border-color:#3b3b57 !important;
 }
-section[data-testid="stSidebar"] div[data-baseweb="select"] * { color:#ffffff !important; }
+section[data-testid="stSidebar"] div[data-baseweb="select"] div,
+section[data-testid="stSidebar"] div[data-baseweb="select"] span { color:#ffffff !important; }
 section[data-testid="stSidebar"] div[data-baseweb="select"] svg { fill:#ffffff !important; }
 
-/* ---- MENÚ DESPLEGABLE (portal global). Streamlit lo monta fuera del sidebar. ---- */
-/* Contenedor del menú */
+/* MENÚ desplegable (portal global) — todo blanco sobre fondo oscuro */
 div[role="listbox"]{
   background:#101325 !important; color:#ffffff !important;
   border:1px solid #3b3b57 !important; box-shadow:0 8px 24px rgba(0,0,0,.45) !important;
 }
-/* Texto de todas las opciones y subnodos */
 div[role="listbox"] * { color:#ffffff !important; }
-/* Hover de opciones */
 div[role="option"]:hover { background:#283056 !important; }
 
-/* ---- Toggle del sidebar siempre visible ---- */
+/* Toggle nativo del sidebar visible */
 div[data-testid="collapsedControl"]{
   position:fixed; left:0; top:0; padding:6px 10px; background:#1e1e2a;
   border-top-right-radius:10px; border-bottom-right-radius:10px;
-  box-shadow:0 2px 10px rgba(0,0,0,.3); z-index:9999; opacity:1 !important;
+  box-shadow:0 2px 10px rgba(0,0,0,.3); z-index:9998; opacity:1 !important;
 }
 div[data-testid="collapsedControl"] * { color:#ffffff !important; fill:#ffffff !important; }
 button[title="Hide sidebar"] svg, button[title="Show sidebar"] svg { fill:#ffffff !important; color:#ffffff !important; }
 
-/* ---- Tarjetas y badges ---- */
+/* Botón flotante propio para reabrir sidebar cuando esté oculto */
+.reopen-sidebar{
+  position:fixed; top:10px; left:10px; z-index:10000; width:44px; height:44px;
+  background:#ffcc00; color:#111; border-radius:12px; display:none;
+  align-items:center; justify-content:center; box-shadow:0 4px 14px rgba(0,0,0,.35);
+  font-weight:900; cursor:pointer;
+}
+.reopen-sidebar::after{ content:"\\2190"; font-size:22px; }
+
+/* Tarjetas y badges */
 .card { border:1px solid #e6e6ef; border-radius:14px; padding:14px; background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.06); }
 .kpi { font-size:1.12rem; font-weight:700; }
 .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.82rem; font-weight:700; }
@@ -74,22 +82,44 @@ button[title="Hide sidebar"] svg, button[title="Show sidebar"] svg { fill:#fffff
 .bg-bad { background:#fde2e1; color:#a02c2a; border:1px solid #f6b1af;}
 .bg-info{ background:#e7efff; color:#274c9a; border:1px solid #c6d7ff;}
 
-/* ---- Botón de descarga con alto contraste ---- */
+/* Botón de descarga: color anterior (#274c9a) + texto blanco */
 .stDownloadButton > button, .stDownloadButton button{
-  background:#0f3a8d !important; color:#ffffff !important; border:0 !important;
+  background:#274c9a !important; color:#ffffff !important; border:0 !important;
   border-radius:12px !important; padding:12px 16px !important; font-weight:800 !important; font-size:0.98rem !important;
 }
 .stDownloadButton > button svg, .stDownloadButton button svg { fill:#ffffff !important; color:#ffffff !important; }
 .stDownloadButton > button:hover, .stDownloadButton button:hover{ filter:brightness(1.08); }
 
-/* ---- Responsive ---- */
+/* Responsive */
 @media (max-width: 480px){ .stApp { padding:.4rem; } h1{font-size:1.36rem;} h2{font-size:1.12rem;} .card{padding:10px;} }
 </style>
+
+<!-- Botón flotante: aparece solo si el sidebar está colapsado -->
+<div id="reopenSidebar" class="reopen-sidebar" title="Mostrar panel"></div>
+<script>
+const btn = document.getElementById('reopenSidebar');
+function isCollapsed(){
+  const sb = document.querySelector('section[data-testid="stSidebar"]');
+  if(!sb) return true;
+  const style = window.getComputedStyle(sb);
+  return style.display === 'none' || sb.offsetWidth === 0;
+}
+function tick(){
+  btn.style.display = isCollapsed() ? 'flex' : 'none';
+}
+setInterval(tick, 400);
+btn.onclick = ()=>{
+  // Click al control nativo para reabrir
+  const toggle = document.querySelector('button[title="Show sidebar"]')
+              || document.querySelector('div[data-testid="collapsedControl"] button');
+  if(toggle){ toggle.click(); }
+};
+</script>
 """, unsafe_allow_html=True)
 
 st.markdown(f"### {BRAND} · Software de Gestión Nutricional")
 
-# =================== Catálogos y utilidades (idénticos) ===================
+# =================== Catálogos y utilidades ===================
 EXCHANGES = {
     "Vegetales": {"kcal":25,"CHO":5,"PRO":2,"FAT":0,"portion":"1 taza crudas / 1/2 taza cocidas"},
     "Frutas": {"kcal":60,"CHO":15,"PRO":0,"FAT":0,"portion":"1 unid pequeña / 1/2 taza picada"},
@@ -278,7 +308,7 @@ with L2:
 with L3:
     if insulina>0: lab_card("Insulina (µUI/mL)", insulina, insulina<=25)
 
-# =================== DOCX ===================
+# =================== Exportar DOCX ===================
 st.markdown("---")
 if DOCX:
     doc = Document(); stl=doc.styles["Normal"]; stl.font.name="Calibri"; stl.font.size=Pt(11)
