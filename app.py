@@ -1,11 +1,10 @@
-# app.py — @nutritionsays · Gestión Nutricional (ambulatorio por defecto, cálculo en vivo)
+# app.py — @nutritionsays · Gestión Nutricional (ambulatorio, cálculo en vivo)
 from datetime import date
 from io import BytesIO
 import math
 import streamlit as st
 import pandas as pd
 
-# DOCX opcional
 try:
     from docx import Document
     from docx.shared import Pt
@@ -18,17 +17,17 @@ st.set_page_config(
     page_title=f"{BRAND} · Gestión Nutricional",
     page_icon="🍎",
     layout="centered",
-    initial_sidebar_state="expanded",   # <- para que siempre puedas recuperarlo
+    initial_sidebar_state="expanded",
 )
 
-# ---------- ESTILOS (legibilidad dropdowns, toggle sidebar, botón descarga) ----------
+# =================== CSS: arreglos de legibilidad y toggle ===================
 st.markdown("""
 <style>
-/* Main claro */
+/* ---- Base ---- */
 .stApp, .block-container { background:#ffffff !important; color:#111 !important; }
 h1,h2,h3,h4,h5, p, span, label, div, li, th, td { color:#111 !important; }
 
-/* Sidebar oscuro con inputs legibles */
+/* ---- Sidebar oscuro ---- */
 section[data-testid="stSidebar"] { background:#1e1e2a !important; border-right:1px solid #141421; }
 section[data-testid="stSidebar"] * { color:#f5f6fb !important; }
 section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] .stMarkdown p { color:#e6def7 !important; }
@@ -39,27 +38,34 @@ section[data-testid="stSidebar"] input::placeholder, section[data-testid="stSide
   color:#cbd0ff !important; opacity:.85;
 }
 
-/* ---- SELECTS SIEMPRE LEGIBLES (control + menú BaseWeb) ---- */
+/* ---- SELECTS legibles (control) ---- */
 section[data-testid="stSidebar"] div[data-baseweb="select"]>div {
   color:#ffffff !important; background:#111223 !important; border-color:#3b3b57 !important;
 }
+section[data-testid="stSidebar"] div[data-baseweb="select"] * { color:#ffffff !important; }
 section[data-testid="stSidebar"] div[data-baseweb="select"] svg { fill:#ffffff !important; }
 
-/* Menú desplegable: forzamos color en TODOS los descendientes para que se lea sí o sí */
-.stApp [data-baseweb="menu"]{
+/* ---- MENÚ DESPLEGABLE (portal global). Streamlit lo monta fuera del sidebar. ---- */
+/* Contenedor del menú */
+div[role="listbox"]{
   background:#101325 !important; color:#ffffff !important;
-  border:1px solid #3b3b57 !important; box-shadow:0 8px 20px rgba(0,0,0,.45) !important;
+  border:1px solid #3b3b57 !important; box-shadow:0 8px 24px rgba(0,0,0,.45) !important;
 }
-.stApp [data-baseweb="menu"] *{ color:#ffffff !important; }
-.stApp [data-baseweb="menu"] div[role="option"], .stApp [data-baseweb="menu"] li { color:#ffffff !important; }
-.stApp [data-baseweb="menu"] div[role="option"]:hover, .stApp [data-baseweb="menu"] li:hover{ background:#283056 !important; }
+/* Texto de todas las opciones y subnodos */
+div[role="listbox"] * { color:#ffffff !important; }
+/* Hover de opciones */
+div[role="option"]:hover { background:#283056 !important; }
 
-/* Toggle de sidebar (icono hamburguesa/flecha) visible y blanco */
-button[title="Hide sidebar"] svg, button[title="Show sidebar"] svg,
-div[data-testid="collapsedControl"] svg { fill:#ffffff !important; color:#ffffff !important; }
-div[data-testid="collapsedControl"]{ opacity:1 !important; }
+/* ---- Toggle del sidebar siempre visible ---- */
+div[data-testid="collapsedControl"]{
+  position:fixed; left:0; top:0; padding:6px 10px; background:#1e1e2a;
+  border-top-right-radius:10px; border-bottom-right-radius:10px;
+  box-shadow:0 2px 10px rgba(0,0,0,.3); z-index:9999; opacity:1 !important;
+}
+div[data-testid="collapsedControl"] * { color:#ffffff !important; fill:#ffffff !important; }
+button[title="Hide sidebar"] svg, button[title="Show sidebar"] svg { fill:#ffffff !important; color:#ffffff !important; }
 
-/* Tarjetas y badges */
+/* ---- Tarjetas y badges ---- */
 .card { border:1px solid #e6e6ef; border-radius:14px; padding:14px; background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.06); }
 .kpi { font-size:1.12rem; font-weight:700; }
 .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.82rem; font-weight:700; }
@@ -68,21 +74,22 @@ div[data-testid="collapsedControl"]{ opacity:1 !important; }
 .bg-bad { background:#fde2e1; color:#a02c2a; border:1px solid #f6b1af;}
 .bg-info{ background:#e7efff; color:#274c9a; border:1px solid #c6d7ff;}
 
-/* Botón de descarga legible */
-.stDownloadButton>button, .stDownloadButton button {
-  background:#274c9a !important; color:#ffffff !important; border:0 !important;
-  border-radius:10px !important; padding:10px 14px !important; font-weight:700 !important;
+/* ---- Botón de descarga con alto contraste ---- */
+.stDownloadButton > button, .stDownloadButton button{
+  background:#0f3a8d !important; color:#ffffff !important; border:0 !important;
+  border-radius:12px !important; padding:12px 16px !important; font-weight:800 !important; font-size:0.98rem !important;
 }
-.stDownloadButton>button:hover, .stDownloadButton button:hover { filter:brightness(1.08); }
+.stDownloadButton > button svg, .stDownloadButton button svg { fill:#ffffff !important; color:#ffffff !important; }
+.stDownloadButton > button:hover, .stDownloadButton button:hover{ filter:brightness(1.08); }
 
-/* Responsivo */
+/* ---- Responsive ---- */
 @media (max-width: 480px){ .stApp { padding:.4rem; } h1{font-size:1.36rem;} h2{font-size:1.12rem;} .card{padding:10px;} }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown(f"### {BRAND} · Software de Gestión Nutricional")
 
-# ---------- Catálogos ----------
+# =================== Catálogos y utilidades (idénticos) ===================
 EXCHANGES = {
     "Vegetales": {"kcal":25,"CHO":5,"PRO":2,"FAT":0,"portion":"1 taza crudas / 1/2 taza cocidas"},
     "Frutas": {"kcal":60,"CHO":15,"PRO":0,"FAT":0,"portion":"1 unid pequeña / 1/2 taza picada"},
@@ -94,7 +101,6 @@ EXCHANGES = {
 }
 PAL = {"Muy bajo (sedentario)":1.2, "Ligero":1.4, "Moderado":1.6, "Alto":1.75, "Muy alto":2.0}
 
-# ---------- Utilidades ----------
 def mifflin(sex, w, h_cm, age): return 10*w + 6.25*h_cm - 5*age + (5 if sex.lower().startswith("m") else -161)
 def harris_benedict(sex, w, h_cm, age):
     if sex.lower().startswith("m"): return 66.47 + (13.75*w) + (5.003*h_cm) - (6.755*age)
@@ -151,7 +157,7 @@ def distribute_by_meal(d):
         for m,fr in split.items(): out[m][g]=round(tot*fr,1)
     return out
 
-# ---------- Sidebar (en vivo) ----------
+# =================== Sidebar ===================
 with st.sidebar:
     st.subheader("Paciente")
     st.selectbox("Modo", ["Ambulatorio (recomendado)"])
@@ -186,7 +192,7 @@ with st.sidebar:
         ldl = st.number_input("LDL (mg/dL)", 0.0, 300.0, 0.0, step=0.1)
         tg  = st.number_input("Triglicéridos (mg/dL)", 0.0, 1000.0, 0.0, step=0.1)
 
-# ---------- Cálculos en vivo ----------
+# =================== Cálculos ===================
 mb = mifflin(sexo, peso, talla_cm, edad) if eq.startswith("Mifflin") else harris_benedict(sexo, peso, talla_cm, edad)
 tee = tee_ambulatorio(mb, PAL[pal_key], ade_on)
 kcal = kcal_target(tee, objetivo)
@@ -195,13 +201,12 @@ imc = bmi(peso, talla_cm)
 icc = whr(cintura, cadera)
 ict = whtr(cintura, talla_cm)
 
-# %grasa por pliegues si hay datos
 pct_grasa_dw=None
 if sum([p_bi, p_tri, p_sub, p_sup])>0:
     dens = dw_density(sexo, edad, p_bi, p_tri, p_sub, p_sup)
     pct_grasa_dw = siri_pctfat(dens)
 
-# ---------- Requerimientos (reactivos) ----------
+# =================== Requerimientos ===================
 st.header("Requerimientos nutricionales")
 use_preset = st.checkbox("Preset rápido (Prot 20%, Grasas 30%, CHO 50%)", value=True)
 if use_preset:
@@ -222,7 +227,7 @@ st.info(f"CHO (%) se ajusta a: **{pct_cho}%** · Monoinsat. (%) se ajusta a: **{
 
 mac = macros(kcal, pct_prot, pct_fat, pct_cho, peso, pct_cho_complex, fat_split=(sat, poli, max(0,100-sat-poli)))
 
-# ---------- KPIs ----------
+# =================== KPIs ===================
 st.header("Resultados clínicos")
 k = st.columns(3)
 k[0].markdown(f"<div class='card'><div class='kpi'>IMC: {imc} kg/m²</div><div>OMS: {'Bajo peso' if imc and imc<18.5 else 'Normopeso' if imc and imc<25 else 'Sobrepeso' if imc and imc<30 else 'Obesidad I' if imc and imc<35 else 'Obesidad II' if imc and imc<40 else 'Obesidad III'}</div></div>", unsafe_allow_html=True)
@@ -237,7 +242,7 @@ if pct_grasa_dw is not None: bf.append(f"{pct_grasa_dw}% (pliegues)")
 if bia_fat>0: bf.append(f"{bia_fat}% (BIA)")
 k2[2].markdown(f"<div class='card'><div class='kpi'>% Grasa: {' · '.join(bf) if bf else '—'}</div><div>Durnin–Womersley + Siri / BIA</div></div>", unsafe_allow_html=True)
 
-# ---------- Intercambios ----------
+# =================== Intercambios ===================
 st.header("Plan por Intercambios")
 diario = exchanges_from_kcal(kcal); por_comida = distribute_by_meal(diario)
 df_plan = pd.DataFrame({
@@ -252,34 +257,28 @@ df_plan = pd.DataFrame({
 st.dataframe(df_plan, use_container_width=True, height=300)
 st.dataframe(pd.DataFrame([{"Tiempo":m, **gr} for m,gr in por_comida.items()]), use_container_width=True, height=240)
 
-# ---------- Laboratorios con tarjetas verde/rojo ----------
+# =================== Laboratorios (verde/ámbar/rojo) ===================
 st.header("Laboratorios – interpretación")
 def lab_card(nombre, valor, ok, warn=None):
     if valor is None or valor==0: return
     cls = "bg-ok" if ok else ("bg-warn" if (warn if warn is not None else False) else "bg-bad")
     st.markdown(f"<div class='card {cls}'><b>{nombre}:</b> {valor}</div>", unsafe_allow_html=True)
 
-colL1, colL2, colL3 = st.columns(3)
-
-with colL1:
-    if glicemia>0:
-        lab_card("Glucosa (mg/dL)", glicemia, 70<=glicemia<100, warn=(100<=glicemia<126))
-    if hba1c>0:
-        lab_card("HbA1c (%)", hba1c, hba1c<5.7, warn=(5.7<=hba1c<6.5))
+L1, L2, L3 = st.columns(3)
+with L1:
+    if glicemia>0: lab_card("Glucosa (mg/dL)", glicemia, 70<=glicemia<100, warn=(100<=glicemia<126))
+    if hba1c>0:   lab_card("HbA1c (%)", hba1c, hba1c<5.7, warn=(5.7<=hba1c<6.5))
     if hdl>0:
         low=40 if sexo.startswith("Mas") else 50
         lab_card("HDL (mg/dL)", hdl, hdl>=low)
-
-with colL2:
-    if ldl>0:  lab_card("LDL (mg/dL)", ldl, ldl<100)
-    if tg>0:   lab_card("Triglicéridos (mg/dL)", tg, tg<150)
-    if tc>0:   lab_card("Colesterol total (mg/dL)", tc, tc<200)
-
-with colL3:
+with L2:
+    if ldl>0: lab_card("LDL (mg/dL)", ldl, ldl<100)
+    if tg>0:  lab_card("Triglicéridos (mg/dL)", tg, tg<150)
+    if tc>0:  lab_card("Colesterol total (mg/dL)", tc, tc<200)
+with L3:
     if insulina>0: lab_card("Insulina (µUI/mL)", insulina, insulina<=25)
-    # Puedes ampliar aquí más analitos con sus rangos si los necesitas
 
-# ---------- Exportar PLAN (DOCX) ----------
+# =================== DOCX ===================
 st.markdown("---")
 if DOCX:
     doc = Document(); stl=doc.styles["Normal"]; stl.font.name="Calibri"; stl.font.size=Pt(11)
