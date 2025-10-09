@@ -1,11 +1,10 @@
-# app.py — @nutritionsays · Gestión Nutricional Clínica (UCV)
-# Fix: texto visible en selects del sidebar; no mostrar resultados ni cálculos hasta oprimir "Calcular";
-# recálculo automático y seguro al cambiar requerimientos; sin valores precalculados.
+# app.py — @nutritionsays · Gestión Nutricional (Ambulatorio por defecto)
+# Fix: dropdown legible (menú y opciones), “Ambulatorio” como modo principal (TEE = MB×PAL [+ADE opc.]),
+# “Hospitalario (avanzado)” con FE/FD/FA; form con botón Calcular; sin precálculo.
 
 from datetime import date
 from io import BytesIO
-import json, math
-
+import math
 import streamlit as st
 import pandas as pd
 
@@ -20,14 +19,14 @@ except Exception:
 BRAND = "@nutritionsays"
 st.set_page_config(page_title=f"{BRAND} · Gestión Nutricional", page_icon="🍎", layout="centered")
 
-# ===================== ESTILO (incluye selects legibles) =====================
+# ===================== ESTILO (mejoras de legibilidad en dropdowns) =====================
 st.markdown("""
 <style>
-/* Main claro, texto oscuro */
+/* Main claro */
 .stApp, .block-container { background:#ffffff !important; color:#111 !important; }
 h1,h2,h3,h4,h5, p, span, label, div, li, th, td { color:#111 !important; }
 
-/* Sidebar oscuro morado; inputs legibles */
+/* Sidebar oscuro legible */
 section[data-testid="stSidebar"] { background:#1e1e2a !important; border-right:1px solid #141421; }
 section[data-testid="stSidebar"] * { color:#f5f6fb !important; }
 section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] .stMarkdown p { color:#e6def7 !important; }
@@ -36,13 +35,22 @@ section[data-testid="stSidebar"] input, section[data-testid="stSidebar"] textare
 }
 section[data-testid="stSidebar"] input::placeholder, section[data-testid="stSidebar"] textarea::placeholder { color:#cbd0ff !important; opacity:.85; }
 
-/* Selects/combobox (BaseWeb) — texto y menú visibles en oscuro */
+/* Selects visibles en sidebar y en el cuerpo */
 section[data-testid="stSidebar"] div[data-baseweb="select"]>div { color:#ffffff !important; }
 section[data-testid="stSidebar"] div[data-baseweb="select"] svg { fill:#ffffff !important; }
-.stApp [data-baseweb="menu"] { background:#111223 !important; color:#ffffff !important; border:1px solid #3b3b57 !important; }
-.stApp [data-baseweb="menu"] li, .stApp [data-baseweb="menu"] div { color:#ffffff !important; }
 
-/* Controles visuales */
+/* MENÚ DESPLEGABLE (cuando abres la lista): fondo oscuro + texto blanco */
+.stApp [data-baseweb="menu"] {
+  background:#1b1d2c !important; color:#ffffff !important;
+  border:1px solid #3b3b57 !important; box-shadow:0 4px 14px rgba(0,0,0,.35) !important;
+}
+.stApp [data-baseweb="menu"] * { color:#ffffff !important; }
+.stApp [data-baseweb="menu"] li, .stApp [data-baseweb="menu"] div[role="option"] { color:#ffffff !important; }
+.stApp [data-baseweb="menu"] li:hover, .stApp [data-baseweb="menu"] div[role="option"]:hover {
+  background:#2a2e46 !important;
+}
+
+/* Tarjetas y badges */
 .card { border:1px solid #e6e6ef; border-radius:14px; padding:14px; background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.06); }
 .kpi { font-size:1.12rem; font-weight:700; }
 .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.82rem; font-weight:700; }
@@ -56,12 +64,12 @@ section[data-testid="stSidebar"] div[data-baseweb="select"] svg { fill:#ffffff !
 
 st.markdown(f"### {BRAND} · Software de Gestión Nutricional")
 
-# ===================== Estado =====================
+# ===================== Estado base =====================
 if "ready" not in st.session_state: st.session_state.ready=False
 if "kcal" not in st.session_state: st.session_state.kcal=None
-if "mac" not in st.session_state: st.session_state.mac=None
+if "payload" not in st.session_state: st.session_state.payload=None
 
-# ===================== Intercambios =====================
+# ===================== Catálogos =====================
 EXCHANGES = {
     "Vegetales": {"kcal":25,"CHO":5,"PRO":2,"FAT":0,"portion":"1 taza crudas / 1/2 taza cocidas"},
     "Frutas": {"kcal":60,"CHO":15,"PRO":0,"FAT":0,"portion":"1 unid pequeña / 1/2 taza picada"},
@@ -72,44 +80,47 @@ EXCHANGES = {
     "Grasas saludables": {"kcal":45,"CHO":0,"PRO":0,"FAT":5,"portion":"1 cdita (5 g)"}
 }
 
-# ===================== Utilidades =====================
-ACTIVITY = {"VM/Conectado":1.1,"Reposo en cama":1.2,"Deambula (ligera)":1.3,"Ligera (1–3 d/sem)":1.375,"Moderada (3–5 d/sem)":1.55,"Alta (6–7 d/sem)":1.725}
-STRESS = { "Infección leve-moderada/sepsis":1.3, "Cirugía menor":1.1, "Cirugía mayor":1.2,
-    "Trauma huesos largos":1.25, "Politrauma":1.45, "TCE":1.6, "Neurocrítico/ACV":1.15,
-    "Quemados (<40% SCQ)":1.4, "Quemados (≥40% SCQ)":1.8, "EII activa":1.35,
-    "Cáncer/Neumonía":1.2, "Postoperatorio cáncer":1.25, "Cáncer avanzado agresivo":1.4,
-    "Desnutrición moderada o grave":1.0 }
-MALNUT = {"Sin FD":1.0, "Aplicar FD por desnutrición (0.7)":0.7}
+PAL = {  # Ambulatorio (OMS/FAO aproximado)
+    "Muy bajo (sedentario)":1.2, "Ligero":1.4, "Moderado":1.6, "Alto":1.75, "Muy alto":2.0
+}
+FA_HOSP = {"VM/Conectado":1.1,"Reposo en cama":1.2,"Deambula (ligera)":1.3}
+FE = {  # estrés/enfermedad
+    "Ninguno":1.0, "Cirugía menor":1.1, "Cirugía mayor":1.2, "Infección moderada":1.3,
+    "Trauma huesos largos":1.25, "Politrauma":1.45, "TCE":1.6, "Quemados (≥40% SCQ)":1.8
+}
+FD = {"Sin FD":1.0, "Desnutrición moderada/grave (0.7)":0.7}
 
+# ===================== Utilidades =====================
 def mifflin(sex, w, h_cm, age): return 10*w + 6.25*h_cm - 5*age + (5 if sex.lower().startswith("m") else -161)
 def harris_benedict(sex, w, h_cm, age):
     if sex.lower().startswith("m"): return 66.47 + (13.75*w) + (5.003*h_cm) - (6.755*age)
     return 655.09 + (9.563*w) + (1.850*h_cm) - (4.676*age)
 
-def tee_from_factors(mb, ade_on, fa, fe, fd):
-    base = mb*(1.1 if ade_on else 1.0)
+def tee_ambulatorio(mb, pal, ade_on=False):
+    base = mb * pal
+    if ade_on: base *= 1.10
+    return round(base)
+
+def tee_hospitalario(mb, fa, fe, fd, ade_on=False):
+    base = mb * (1.10 if ade_on else 1.0)
     return round(base * fa * fe * fd)
 
-def kcal_target(tee, obj): 
+def kcal_target(tee, obj):
     if obj=="Pérdida de peso": return max(1000, tee - (400 if tee>=1600 else 200))
-    if obj=="Ganancia (magro)": return tee+200
+    if obj=="Ganancia (magro)": return tee + 200
     return tee
 
-def bmi(w,hcm): 
+def bmi(w,hcm):
     if not w or not hcm: return None
     h=max(1e-6, hcm/100); return round(w/(h*h),2)
 
-def whr(waist, hip): 
-    return round((waist/hip),2) if waist and hip else None
-
-def whtr(waist, hcm): 
-    return round((waist/hcm),2) if waist and hcm else None
-
+def whr(waist, hip): return round((waist/hip),2) if waist and hip else None
+def whtr(waist, hcm): return round((waist/hcm),2) if waist and hcm else None
 def homa_ir(gmgdl, ins): 
     if gmgdl and ins: return round(((gmgdl/18.0)*ins)/22.5,2)
     return None
 
-# Durnin–Womersley + Siri
+# Durnin–Womersley + Siri (4 pliegues)
 DW = {
     "F":[(17,(1.1549,0.0678)),(29,(1.1599,0.0717)),(39,(1.1423,0.0632)),(49,(1.1333,0.0612)),(120,(1.1339,0.0645))],
     "M":[(17,(1.1620,0.0630)),(29,(1.1631,0.0632)),(39,(1.1422,0.0544)),(49,(1.1620,0.0700)),(120,(1.1715,0.0779))]
@@ -216,10 +227,11 @@ def interp_labs(sex, labs):
     if crp: out.append(("PCR", crp, badge("Aceptable","ok") if crp<=5 else badge("Alta","bad")))
     return out
 
-# ===================== SIDEBAR (captura + botón Calcular) =====================
+# ===================== SIDEBAR (form con botón) =====================
 with st.sidebar:
     with st.form("cap"):
         st.subheader("Paciente")
+        modo = st.selectbox("Modo", ["Ambulatorio (recomendado)", "Hospitalario (avanzado)"])
         nombre = st.text_input("Nombre y apellido")
         sexo = st.selectbox("Sexo biológico", ["Femenino","Masculino"])
         edad = st.number_input("Edad (años)", 1, 120, 0, step=1)
@@ -228,15 +240,20 @@ with st.sidebar:
 
         st.caption("Ecuación y factores energéticos")
         eq = st.selectbox("Ecuación de MB", ["Mifflin–St Jeor","Harris–Benedict"])
-        ade_on = st.checkbox("Incluir ADE / efecto térmico (~10%)", value=True)
-        fa = st.selectbox("FA (actividad)", list(ACTIVITY.keys()), index=0)
-        fe = st.selectbox("FE (estrés/enfermedad)", list(STRESS.keys()), index=0)
-        fd = st.selectbox("FD (desnutrición)", list(MALNUT.keys()), index=0)
+        ade_on = st.checkbox("Añadir ADE/TEF (~10%)", value=False)
+
+        if modo.startswith("Ambulatorio"):
+            pal = st.selectbox("PAL (actividad)", list(PAL.keys()), index=1)
+            fa_hosp = None; fe = None; fd = None
+        else:
+            pal = None
+            fa_hosp = st.selectbox("FA (actividad hospitalaria)", list(FA_HOSP.keys()), index=1)
+            fe = st.selectbox("FE (estrés/enfermedad)", list(FE.keys()), index=0)
+            fd = st.selectbox("FD (desnutrición)", list(FD.keys()), index=0)
 
         objetivo = st.selectbox("Objetivo", ["Pérdida de peso","Mantenimiento","Ganancia (magro)"], index=1)
 
-        with st.expander("Antropometría", expanded=False):
-            peso_usual = st.number_input("Peso usual (kg)", 0.0, 400.0, 0.0, step=0.1)
+        with st.expander("Antropometría (opcional)", expanded=False):
             cintura = st.number_input("Cintura (cm)", 0.0, 300.0, 0.0, step=0.1)
             cadera  = st.number_input("Cadera (cm)", 0.0, 300.0, 0.0, step=0.1)
             muac    = st.number_input("CB/MUAC (cm)", 0.0, 80.0, 0.0, step=0.1)
@@ -246,7 +263,7 @@ with st.sidebar:
             p_sup = st.number_input("Suprailiaco (mm)", 0.0, 60.0, 0.0, step=0.5)
             bia_fat = st.number_input("% Grasa (BIA)", 0.0, 70.0, 0.0, step=0.1)
 
-        with st.expander("Laboratorios", expanded=False):
+        with st.expander("Laboratorios (opcional)", expanded=False):
             glicemia = st.number_input("Glucosa (mg/dL)", 0.0, 800.0, 0.0, step=0.1)
             insulina = st.number_input("Insulina (µUI/mL)", 0.0, 1000.0, 0.0, step=0.1)
             hba1c = st.number_input("HbA1c (%)", 0.0, 20.0, 0.0, step=0.1)
@@ -254,44 +271,38 @@ with st.sidebar:
             hdl = st.number_input("HDL (mg/dL)", 0.0, 200.0, 0.0, step=0.1)
             ldl = st.number_input("LDL (mg/dL)", 0.0, 300.0, 0.0, step=0.1)
             tg  = st.number_input("Triglicéridos (mg/dL)", 0.0, 1000.0, 0.0, step=0.1)
-            creat = st.number_input("Creatinina (mg/dL)", 0.0, 20.0, 0.0, step=0.01)
-            urea   = st.number_input("Urea (mg/dL)", 0.0, 300.0, 0.0, step=0.1)
-            alt = st.number_input("ALT (U/L)", 0.0, 2000.0, 0.0, step=0.1)
-            ast = st.number_input("AST (U/L)", 0.0, 2000.0, 0.0, step=0.1)
-            hb  = st.number_input("Hemoglobina (g/dL)", 0.0, 25.0, 0.0, step=0.1)
-            ferr = st.number_input("Ferritina (ng/mL)", 0.0, 2000.0, 0.0, step=0.1)
-            vitd = st.number_input("Vitamina D 25-OH (ng/mL)", 0.0, 200.0, 0.0, step=0.1)
-            b12 = st.number_input("Vitamina B12 (pg/mL)", 0.0, 5000.0, 0.0, step=1.0)
-            fol = st.number_input("Folato (ng/mL)", 0.0, 50.0, 0.0, step=0.1)
-            tsh = st.number_input("TSH (µUI/mL)", 0.0, 150.0, 0.0, step=0.01)
-            crp = st.number_input("PCR/CRP (mg/L)", 0.0, 500.0, 0.0, step=0.1)
 
         btn = st.form_submit_button("Calcular")
 
-# ======= Solo calcula cuando hay talla y peso válidos + botón =============
+# ===================== Validación mínima =====================
 if btn and peso>0 and talla_cm>0 and edad>0:
     st.session_state.ready=True
     # MB
     mb = mifflin(sexo, peso, talla_cm, edad) if eq.startswith("Mifflin") else harris_benedict(sexo, peso, talla_cm, edad)
-    tee = tee_from_factors(mb, ade_on, ACTIVITY[fa], STRESS[fe], MALNUT[fd])
+    # TEE según modo
+    if pal is not None:
+        tee = tee_ambulatorio(mb, PAL[pal], ade_on)
+    else:
+        tee = tee_hospitalario(mb, FA_HOSP[fa_hosp], FE[fe], FD[fd], ade_on)
     kcal = kcal_target(tee, objetivo)
+
     st.session_state.kcal = kcal
     st.session_state.payload = {
         "nombre":nombre, "sexo":sexo, "edad":edad, "talla_cm":talla_cm, "peso":peso, "eq":eq,
-        "mb":round(mb), "tee":tee, "objetivo":objetivo, "fa":fa, "fe":fe, "fd":fd, "ade":ade_on,
+        "mb":round(mb), "tee":tee, "objetivo":objetivo, "pal":pal, "fa_hosp":fa_hosp, "fe":fe, "fd":fd, "ade":ade_on,
         "ant":{"cintura":cintura,"cadera":cadera,"muac":muac,"p_bi":p_bi,"p_tri":p_tri,"p_sub":p_sub,"p_sup":p_sup,"bia_fat":bia_fat},
-        "labs":{"glicemia":glicemia,"insulina":insulina,"hba1c":hba1c,"tc":tc,"hdl":hdl,"ldl":ldl,"tg":tg,"creat":creat,"urea":urea,"alt":alt,"ast":ast,"hb":hb,"ferr":ferr,"vitd":vitd,"b12":b12,"fol":fol,"tsh":tsh,"crp":crp}
+        "labs":{"glicemia":glicemia,"insulina":insulina,"hba1c":hba1c,"tc":tc,"hdl":hdl,"ldl":ldl,"tg":tg}
     }
 elif not st.session_state.ready:
-    st.warning("Completa **peso**, **talla** y **edad**, selecciona ecuación y pulsa **Calcular** para ver resultados.")
+    st.warning("Completa **peso**, **talla** y **edad** y pulsa **Calcular**. No se muestran resultados hasta entonces.")
     st.stop()
 
-# ===================== A partir de aquí: todo reactivo a sliders =====================
+# ===================== A partir de aquí todo reactivo =====================
 data = st.session_state.payload
 peso = data["peso"]; talla_cm = data["talla_cm"]; edad = data["edad"]; sexo=data["sexo"]
 kcal = st.session_state.kcal
 
-# Antropometría & derivados
+# Antropometría y derivados
 imc = bmi(peso, talla_cm)
 icc = whr(data["ant"]["cintura"], data["ant"]["cadera"])
 ict = whtr(data["ant"]["cintura"], talla_cm)
@@ -307,11 +318,11 @@ ibw = ibw_hamwi(sexo, talla_cm)
 pari = round(100*(peso/(ibw or 1)),1)
 paj = peso_ajustado_obesidad(peso, ibw) if (imc and (imc>=30 or (ibw and pari>=120))) else 0.0
 
-# ======= Requerimientos (reactivos) =======
+# ===================== Requerimientos (reactivos) =====================
 st.header("Requerimientos nutricionales")
-use_preset = st.checkbox("Preset (Prote 25% · Grasas 30% {7/10/13} · CHO compl 45%)", value=False)
+use_preset = st.checkbox("Preset rápido (Prot 20%, Grasas 30%, CHO 50%)", value=True)
 if use_preset:
-    pct_prot, pct_fat, sat, poli, mono, pct_cho_complex = 25, 30, 7, 10, 13, 45
+    pct_prot, pct_fat, sat, poli, mono, pct_cho_complex = 20, 30, 10, 35, 55, 85
 else:
     c1, c2 = st.columns(2)
     with c1:
@@ -327,65 +338,27 @@ pct_cho = 100 - pct_prot - pct_fat
 st.info(f"CHO (%) se ajusta a: **{pct_cho}%** · Monoinsat. (%) se ajusta a: **{max(0,100-sat-poli)}%**")
 
 mac = macros(kcal, pct_prot, pct_fat, pct_cho, peso, pct_cho_complex, fat_split=(sat, poli, max(0,100-sat-poli)))
-st.session_state.mac = mac  # para exportes
 
-pp1, pp2, pp3 = st.columns(3)
-with pp1: comidas = st.slider("Nº de comidas (3–7)", 3, 7, 5)
-with pp2:
-    default_gkg = float(mac["gkg"]["prot"]) if mac["gkg"]["prot"] else 1.2
-    prot_gkg_obj = st.number_input("Proteína objetivo (g/kg)", min_value=0.8, max_value=3.0, value=float(max(0.8,min(3.0,default_gkg))), step=0.1)
-with pp3:
-    agua_l = st.number_input("Agua (L/día)", min_value=0.5, max_value=5.0, value=round(max(1.5,min(3.5,peso*0.03)),2), step=0.1)
-
-# ======= KPIs =======
+# ===================== KPIs =====================
 st.header("Resultados clínicos")
 k = st.columns(3)
 k[0].markdown(f"<div class='card'><div class='kpi'>IMC: {imc} kg/m²</div><div>OMS: {'Bajo peso' if imc and imc<18.5 else 'Normopeso' if imc and imc<25 else 'Sobrepeso' if imc and imc<30 else 'Obesidad I' if imc and imc<35 else 'Obesidad II' if imc and imc<40 else 'Obesidad III'}</div></div>", unsafe_allow_html=True)
-k[1].markdown(f"<div class='card'><div class='kpi'>MB ({data['eq'].split('–')[0]}): {data['mb']} kcal</div><div>TEE (FA·FE·FD{'+ADE' if data['ade'] else ''}): {data['tee']} kcal</div></div>", unsafe_allow_html=True)
-k[2].markdown(f"<div class='card'><div class='kpi'>Meta calórica: {kcal} kcal</div><div>kcal/kg ref.: {round(kcal/(paj or ibw or peso),2)} kcal/kg</div></div>", unsafe_allow_html=True)
+# Etiqueta de TEE según modo usado
+modo_txt = "MB×PAL" if data["pal"] is not None else "MB×(ADE?)×FA×FE×FD"
+k[1].markdown(f"<div class='card'><div class='kpi'>MB: {data['mb']} kcal</div><div>TEE ({modo_txt}): {data['tee']} kcal</div></div>", unsafe_allow_html=True)
+k[2].markdown(f"<div class='card'><div class='kpi'>Meta calórica: {kcal} kcal</div><div>kcal/kg ref.: {round(kcal/((paj or ibw or peso) or 1),2)} kcal/kg</div></div>", unsafe_allow_html=True)
 
 k2 = st.columns(3)
 k2[0].markdown(f"<div class='card'><div class='kpi'>ICC: {icc if icc is not None else '—'}</div><div>Riesgo ↑ si >0.85 (F) / >0.90 (M)</div></div>", unsafe_allow_html=True)
-k2[1].markdown(f"<div class='card'><div class='kpi'>ICT: {ict if ict is not None else '—'}</div><div>Riesgo ↑ si ≥0.5 (adultos)</div></div>", unsafe_allow_html=True)
+k2[1].markdown(f"<div class='card'><div class='kpi'>ICT: {ict if ict is not None else '—'}</div><div>Riesgo ↑ si ≥0.5</div></div>", unsafe_allow_html=True)
 bf=[]
 if pct_grasa_dw is not None: bf.append(f"{pct_grasa_dw}% (pliegues)")
 if data["ant"]["bia_fat"]>0: bf.append(f"{data['ant']['bia_fat']}% (BIA)")
 k2[2].markdown(f"<div class='card'><div class='kpi'>% Grasa: {' · '.join(bf) if bf else '—'}</div><div>Durnin–Womersley + Siri / BIA</div></div>", unsafe_allow_html=True)
 
-# IBW / PAJ / AMA
-est_cols = st.columns(3)
-est_cols[0].markdown(f"<div class='card'><div class='kpi'>IBW Hamwi: {round(ibw,1)} kg</div><div>PARI: {pari}%</div></div>", unsafe_allow_html=True)
-est_cols[1].markdown(f"<div class='card'><div class='kpi'>Peso ajustado: {round(paj,1) if paj else '—'} kg</div><div>Aplica si IMC≥30 o PARI≥120%</div></div>", unsafe_allow_html=True)
-ama = ama_area(data["ant"]["muac"], data["ant"]["p_tri"])
-est_cols[2].markdown(f"<div class='card'><div class='kpi'>AMA: {ama if ama is not None else '—'} cm²</div><div>MUAC & pliegue tríceps</div></div>", unsafe_allow_html=True)
-
-# ======= Laboratorios (interpretación) =======
-st.header("Laboratorios – interpretación")
-lab_int = interp_labs(sexo, {"glu":data["labs"]["glicemia"],"a1c":data["labs"]["hba1c"],
-                             "homa":homa,"ldl":data["labs"]["ldl"],"hdl":data["labs"]["hdl"],
-                             "tg":data["labs"]["tg"],"tc":data["labs"]["tc"],"creat":data["labs"]["creat"],
-                             "alt":data["labs"]["alt"],"ast":data["labs"]["ast"],"hb":data["labs"]["hb"],
-                             "ferr":data["labs"]["ferr"],"vitd":data["labs"]["vitd"],"b12":data["labs"]["b12"],
-                             "tsh":data["labs"]["tsh"],"urea":data["labs"]["urea"],"crp":data["labs"]["crp"]})
-if lab_int:
-    for name, val, flag in lab_int:
-        st.markdown(f"- **{name}: {val}**  {flag}", unsafe_allow_html=True)
-else:
-    st.info("Ingrese valores para ver interpretación y rangos.")
-
-# ======= Sodio =======
-st.header("Sodio")
-cna1, cna2, cna3 = st.columns(3)
-with cna1: na_obj = st.number_input("Objetivo (mg Na/día)", 500, 5000, 2300, step=50)
-with cna2: na_cons = st.number_input("Consumido (mg Na/día)", 0, 5000, 0, step=10)
-na_calc = sodium_convert(na_obj, na_cons)
-with cna3: st.metric("Na remanente (mg)", na_calc["remaining_mg"])
-st.caption(f"≈ {na_calc['salt_g']} g NaCl ( {na_calc['tsp']} cdtas ) · 400 mg Na ≈ 1 g NaCl · 1 cdta ≈ 5 g")
-
-# ======= Intercambios =======
+# ===================== Intercambios =====================
 st.header("Plan por Intercambios")
-diario = exchanges_from_kcal(kcal)
-por_comida = distribute_by_meal(diario)
+diario = exchanges_from_kcal(kcal); por_comida = distribute_by_meal(diario)
 df_plan = pd.DataFrame({
     "Grupo": list(diario.keys()),
     "Raciones/día": list(diario.values()),
@@ -398,121 +371,35 @@ df_plan = pd.DataFrame({
 st.dataframe(df_plan, use_container_width=True, height=320)
 st.dataframe(pd.DataFrame([{"Tiempo":m, **gr} for m,gr in por_comida.items()]), use_container_width=True, height=300)
 
-# ======= ADIME & exportes =======
-st.header("ADIME")
-motivo = st.text_area("Motivo / Resumen")
-dx_pes = st.text_area("Diagnóstico(s) PES (NCPT)", placeholder="Problema relacionado con ... evidenciado por ...")
-presc = st.text_area("Prescripción Dietética", placeholder="Plan por intercambios individualizado + educación nutricional.")
-me = st.text_area("Monitoreo/Evaluación", value="Control 2–4 semanas; peso, cintura, adherencia; labs según caso.")
-
-def _table_dist(doc, por_comida, diario):
-    cols=["Lista","Desayuno","Merienda AM","Almuerzo","Merienda PM","Cena","Total"]
-    t=doc.add_table(rows=1, cols=len(cols))
-    for i,h in enumerate(cols): t.rows[0].cells[i].text=h
-    for g in diario.keys():
-        row=t.add_row().cells; row[0].text=g; tot=0
-        for j,m in enumerate(["Desayuno","Merienda AM","Almuerzo","Merienda PM","Cena"], start=1):
-            val=por_comida[m].get(g,0); row[j].text=str(val); tot += float(val)
-        row[-1].text=str(round(tot,1))
-    return t
-
-def build_docx_plan(payload, diario, por_comida):
-    if not DOCX: return None
-    doc=Document(); stl=doc.styles["Normal"]; stl.font.name="Calibri"; stl.font.size=Pt(11)
-    doc.add_heading("Plan de alimentación y recomendaciones nutricionales", 0)
-    doc.add_paragraph(payload["paciente"]).runs[0].bold=True
-    doc.add_heading("Datos energéticos", 1)
-    t=doc.add_table(rows=0, cols=2)
-    for k,v in [("MB", payload['mb']),("TEE", payload['tee']),("Meta kcal", payload['kcal']),("kcal/kg ref.", f"{payload['kcalkg']} ({payload['refw']} kg)")]:
-        row=t.add_row().cells; row[0].text=str(k); row[1].text=str(v)
-    doc.add_heading("Listas de intercambios – totales",1)
-    tb=doc.add_table(rows=1, cols=7)
-    for i,h in enumerate(["Lista","Raciones","kcal","CHO","PRO","FAT","Porción"]): tb.rows[0].cells[i].text=h
-    for g,r in diario.items():
-        row=tb.add_row().cells
-        row[0].text=g; row[1].text=str(r)
-        row[2].text=str(EXCHANGES[g]["kcal"]); row[3].text=str(EXCHANGES[g]["CHO"])
-        row[4].text=str(EXCHANGES[g]["PRO"]); row[5].text=str(EXCHANGES[g]["FAT"]); row[6].text=EXCHANGES[g]["portion"]
-    doc.add_heading("Distribución por tiempos de comida",1); _table_dist(doc, por_comida, diario)
-    doc.add_paragraph(BRAND).runs[0].bold=True
-    bio=BytesIO(); doc.save(bio); bio.seek(0); return bio
-
-def build_docx_adime(payload):
-    if not DOCX: return None
-    doc=Document(); stl=doc.styles["Normal"]; stl.font.name="Calibri"; stl.font.size=Pt(11)
-    doc.add_heading("HISTORIA CLÍNICA NUTRICIONAL – Nota ADIME",1)
-    doc.add_paragraph(f"Fecha: {payload['fecha']}   Profesional: {BRAND}   Paciente: {payload['paciente']}")
-    doc.add_heading("Evaluación (A)",2); 
-    for line in payload["A"]: doc.add_paragraph(line)
-    doc.add_heading("Diagnóstico (D)",2)
-    if payload["D"]: [doc.add_paragraph("• "+x) for x in payload["D"]]
-    else: doc.add_paragraph("—")
-    doc.add_heading("Intervención (I)",2); doc.add_paragraph(payload["I"])
-    doc.add_heading("Monitoreo/Evaluación (ME)",2); doc.add_paragraph(payload["ME"])
-    m=payload["macros"]; doc.add_heading("Requerimientos",2)
-    doc.add_paragraph(f"Energía: {payload['kcal']} kcal/d  ({payload['kcal_kg']} kcal/kg)")
-    doc.add_paragraph(f"Proteínas: {m['pct']['prot']}% → {m['g']['prot']} g ({payload['gkg_prot']} g/kg)")
-    doc.add_paragraph(f"Grasas: {m['pct']['fat']}% → {m['g']['fat']} g (Sat {m['g']['sat']} g, Poli {m['g']['poli']} g, Mono {m['g']['mono']} g)")
-    doc.add_paragraph(f"CHO: {m['pct']['cho']}% → {m['g']['cho']} g (Compl {m['g']['cho_c']} g / Simp {m['g']['cho_s']} g)")
-    s=payload["sodium"]; doc.add_paragraph(f"Sodio objetivo: {s['target_mg']} mg; Consumido: {s['current_mg']} mg; Remanente: {s['remaining_mg']} mg  ≈  {s['salt_g']} g NaCl ( {s['tsp']} cdtas )")
-    bio=BytesIO(); doc.save(bio); bio.seek(0); return bio
-
-def fhir_order(payload):
-    return {"resourceType":"NutritionOrder","status":"active","intent":"order","dateTime": payload["fecha"],
-            "patient":{"display": payload["paciente"]},"orderer":{"display": BRAND},
-            "oralDiet":{"type":[{"text":"Personalizada"}],
-                "nutrient":[{"modifier":{"text":"Energy"},"amount":{"value": payload["kcal"],"unit":"kcal/d"}},
-                            {"modifier":{"text":"Protein"},"amount":{"value": payload["macros"]["g"]["prot"],"unit":"g/d"}},
-                            {"modifier":{"text":"Fat"},"amount":{"value": payload["macros"]["g"]["fat"],"unit":"g/d"}},
-                            {"modifier":{"text":"Carbohydrate"},"amount":{"value": payload["macros"]["g"]["cho"],"unit":"g/d"}}]}}
-
-def fhir_intake(payload):
-    return {"resourceType":"NutritionIntake","status":"completed","occurrenceDateTime": payload["fecha"],
-            "subject":{"display": payload["paciente"]},
-            "consumedItem":[{"type":{"text":"Plan prescrito"},
-                             "nutrient":[{"item":{"text":"Protein"},"amount":{"value": payload["macros"]["g"]["prot"],"unit":"g"}},
-                                         {"item":{"text":"Fat"},"amount":{"value": payload["macros"]["g"]["fat"],"unit":"g"}},
-                                         {"item":{"text":"Carbohydrate"},"amount":{"value": payload["macros"]["g"]["cho"],"unit":"g"}}],
-                             "amount":{"value": payload["kcal"], "unit":"kcal"}}]}
-
-# Descargas
-st.markdown("---")
-tipo = st.radio("Documento a generar", ["Plan de alimentación (@nutritionsays)","Nota ADIME"], index=0, horizontal=True)
-
-common = {"fecha": date.today().isoformat(), "paciente": data["nombre"] or "—",
-          "kcal": kcal, "kcal_kg": round(kcal/((paj or ibw or peso) or 1),2),
-          "gkg_prot": mac["gkg"]["prot"], "macros": mac,
-          "sodium": {"target_mg": na_obj if 'na_obj' in locals() else 2300,
-                     "current_mg": na_cons if 'na_cons' in locals() else 0,
-                     **sodium_convert(na_obj if 'na_obj' in locals() else 2300, na_cons if 'na_cons' in locals() else 0)}}
-
-if tipo=="Plan de alimentación (@nutritionsays)":
-    plan = build_docx_plan({
-        "paciente": data["nombre"] or "—", "mb": data["mb"], "tee": data["tee"], "kcal": kcal,
-        "kcalkg": round(kcal/((paj or ibw or peso) or 1),2), "refw": round((paj or ibw or peso),1)
-    }, diario, por_comida)
-    if DOCX:
-        st.download_button("⬇️ Descargar PLAN (DOCX editable)", data=plan,
-            file_name="plan_nutritionsays.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-    else:
-        st.info("Instala 'python-docx' y 'lxml' para exportar DOCX.")
+# ===================== Laboratorios =====================
+st.header("Laboratorios – interpretación")
+lab_int = interp_labs(sexo, {"glu":data["labs"]["glicemia"],"a1c":data["labs"]["hba1c"],
+                             "homa":homa,"ldl":data["labs"]["ldl"],"hdl":data["labs"]["hdl"],
+                             "tg":data["labs"]["tg"],"tc":data["labs"]["tc"]})
+if lab_int:
+    for name, val, flag in lab_int:
+        st.markdown(f"- **{name}: {val}**  {flag}", unsafe_allow_html=True)
 else:
-    adime = build_docx_adime({
-        **common,
-        "A":[f"MB {data['mb']} kcal; TEE {data['tee']} kcal (FA {ACTIVITY[data['fa']]} · FE {STRESS[data['fe']]} · FD {MALNUT[data['fd']]} {'+ ADE 10%' if data['ade'] else ''}).",
-             f"Meta {kcal} kcal; kcal/kg ref. {round(kcal/((paj or ibw or peso) or 1),2)}.",
-             f"IMC {imc} kg/m²; ICC {icc if icc is not None else '—'}; ICT {ict if ict is not None else '—'};",
-             f"%Grasa: {(str(pct_grasa_dw)+'% (pliegues)') if pct_grasa_dw is not None else '—'} {'· '+str(data['ant']['bia_fat'])+'% (BIA)' if data['ant']['bia_fat']>0 else ''}."],
-        "D":[p.strip() for p in (dx_pes or "").split("\n") if p.strip()],
-        "I": presc or "Plan por intercambios + educación.",
-        "ME": me or "Control 2–4 semanas."
-    })
-    if DOCX:
-        st.download_button("⬇️ Descargar ADIME (DOCX)", data=adime,
-            file_name="adime_nutritionsays.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-    else:
-        st.info("Instala 'python-docx' y 'lxml' para exportar DOCX.")
+    st.info("Ingrese valores para ver interpretación.")
 
-st.caption("Herramienta de apoyo clínico para profesionales. Ajustar a juicio clínico y guías locales. © " + BRAND)
+# ===================== Exportes (DOCX opcional) =====================
+st.markdown("---")
+if DOCX:
+    doc = Document(); stl=doc.styles["Normal"]; stl.font.name="Calibri"; stl.font.size=Pt(11)
+    doc.add_heading("Plan de alimentación – " + BRAND, 0)
+    doc.add_paragraph(f"Paciente: {data['nombre'] or '—'}  |  Fecha: {date.today().isoformat()}")
+    doc.add_paragraph(f"MB: {data['mb']} kcal  |  TEE: {data['tee']} kcal  |  Meta: {kcal} kcal  |  kcal/kg ref.: {round(kcal/((paj or ibw or peso) or 1),2)}")
+    t=doc.add_table(rows=1, cols=7)
+    for i,h in enumerate(["Lista","Raciones","kcal","CHO","PRO","FAT","Porción"]): t.rows[0].cells[i].text=h
+    for g,r in diario.items():
+        row=t.add_row().cells
+        row[0].text=g; row[1].text=str(r); row[2].text=str(EXCHANGES[g]["kcal"])
+        row[3].text=str(EXCHANGES[g]["CHO"]); row[4].text=str(EXCHANGES[g]["PRO"])
+        row[5].text=str(EXCHANGES[g]["FAT"]); row[6].text=EXCHANGES[g]["portion"]
+    from io import BytesIO
+    bio=BytesIO(); doc.save(bio); bio.seek(0)
+    st.download_button("⬇️ Descargar PLAN (DOCX)", data=bio,
+                       file_name="plan_nutritionsays.docx",
+                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+st.caption("Herramienta de apoyo clínico para profesionales. Ajustar a guías y juicio clínico. © " + BRAND)
