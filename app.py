@@ -1,12 +1,11 @@
-# app.py — @nutritionsays · Gestión Nutricional (Ambulatorio por defecto, cálculo en vivo)
-
+# app.py — @nutritionsays · Gestión Nutricional (ambulatorio por defecto, cálculo en vivo)
 from datetime import date
 from io import BytesIO
 import math
 import streamlit as st
 import pandas as pd
 
-# Exportar DOCX (opcional)
+# DOCX opcional
 try:
     from docx import Document
     from docx.shared import Pt
@@ -15,38 +14,50 @@ except Exception:
     DOCX = False
 
 BRAND = "@nutritionsays"
-st.set_page_config(page_title=f"{BRAND} · Gestión Nutricional", page_icon="🍎", layout="centered")
+st.set_page_config(
+    page_title=f"{BRAND} · Gestión Nutricional",
+    page_icon="🍎",
+    layout="centered",
+    initial_sidebar_state="expanded",   # <- para que siempre puedas recuperarlo
+)
 
-# ---------- ESTILOS: sidebar oscuro y selects legibles (control + menú) ----------
+# ---------- ESTILOS (legibilidad dropdowns, toggle sidebar, botón descarga) ----------
 st.markdown("""
 <style>
 /* Main claro */
 .stApp, .block-container { background:#ffffff !important; color:#111 !important; }
 h1,h2,h3,h4,h5, p, span, label, div, li, th, td { color:#111 !important; }
 
-/* Sidebar oscuro */
+/* Sidebar oscuro con inputs legibles */
 section[data-testid="stSidebar"] { background:#1e1e2a !important; border-right:1px solid #141421; }
 section[data-testid="stSidebar"] * { color:#f5f6fb !important; }
 section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] .stMarkdown p { color:#e6def7 !important; }
 section[data-testid="stSidebar"] input, section[data-testid="stSidebar"] textarea {
   color:#ffffff !important; background:#111223 !important; border:1px solid #3b3b57 !important;
 }
-section[data-testid="stSidebar"] input::placeholder, section[data-testid="stSidebar"] textarea::placeholder { color:#cbd0ff !important; opacity:.85; }
+section[data-testid="stSidebar"] input::placeholder, section[data-testid="stSidebar"] textarea::placeholder {
+  color:#cbd0ff !important; opacity:.85;
+}
 
-/* ---- SELECTS (siempre legibles) ---- */
-/* Contenedor del select (valor elegido) */
-section[data-testid="stSidebar"] div[data-baseweb="select"]>div { color:#ffffff !important; background:#111223 !important; }
+/* ---- SELECTS SIEMPRE LEGIBLES (control + menú BaseWeb) ---- */
+section[data-testid="stSidebar"] div[data-baseweb="select"]>div {
+  color:#ffffff !important; background:#111223 !important; border-color:#3b3b57 !important;
+}
 section[data-testid="stSidebar"] div[data-baseweb="select"] svg { fill:#ffffff !important; }
-/* Menú desplegable */
-.stApp [data-baseweb="menu"] {
-  background:#1b1d2c !important; color:#ffffff !important;
-  border:1px solid #3b3b57 !important; box-shadow:0 4px 14px rgba(0,0,0,.35) !important;
+
+/* Menú desplegable: forzamos color en TODOS los descendientes para que se lea sí o sí */
+.stApp [data-baseweb="menu"]{
+  background:#101325 !important; color:#ffffff !important;
+  border:1px solid #3b3b57 !important; box-shadow:0 8px 20px rgba(0,0,0,.45) !important;
 }
-.stApp [data-baseweb="menu"] * { color:#ffffff !important; }
+.stApp [data-baseweb="menu"] *{ color:#ffffff !important; }
 .stApp [data-baseweb="menu"] div[role="option"], .stApp [data-baseweb="menu"] li { color:#ffffff !important; }
-.stApp [data-baseweb="menu"] div[role="option"]:hover, .stApp [data-baseweb="menu"] li:hover {
-  background:#2a2e46 !important;
-}
+.stApp [data-baseweb="menu"] div[role="option"]:hover, .stApp [data-baseweb="menu"] li:hover{ background:#283056 !important; }
+
+/* Toggle de sidebar (icono hamburguesa/flecha) visible y blanco */
+button[title="Hide sidebar"] svg, button[title="Show sidebar"] svg,
+div[data-testid="collapsedControl"] svg { fill:#ffffff !important; color:#ffffff !important; }
+div[data-testid="collapsedControl"]{ opacity:1 !important; }
 
 /* Tarjetas y badges */
 .card { border:1px solid #e6e6ef; border-radius:14px; padding:14px; background:#fff; box-shadow:0 1px 6px rgba(0,0,0,.06); }
@@ -56,6 +67,15 @@ section[data-testid="stSidebar"] div[data-baseweb="select"] svg { fill:#ffffff !
 .bg-warn { background:#fff3cd; color:#8a6d1a; border:1px solid #ffe29a;}
 .bg-bad { background:#fde2e1; color:#a02c2a; border:1px solid #f6b1af;}
 .bg-info{ background:#e7efff; color:#274c9a; border:1px solid #c6d7ff;}
+
+/* Botón de descarga legible */
+.stDownloadButton>button, .stDownloadButton button {
+  background:#274c9a !important; color:#ffffff !important; border:0 !important;
+  border-radius:10px !important; padding:10px 14px !important; font-weight:700 !important;
+}
+.stDownloadButton>button:hover, .stDownloadButton button:hover { filter:brightness(1.08); }
+
+/* Responsivo */
 @media (max-width: 480px){ .stApp { padding:.4rem; } h1{font-size:1.36rem;} h2{font-size:1.12rem;} .card{padding:10px;} }
 </style>
 """, unsafe_allow_html=True)
@@ -109,15 +129,16 @@ def macros(kcal, pct_prot, pct_fat, pct_cho, w, pct_cho_complex=85, fat_split=(1
     kcal=max(0,int(kcal or 0))
     total=max(1,int(pct_prot)+int(pct_fat)+int(pct_cho))
     pct_prot=round(100*int(pct_prot)/total); pct_fat=round(100*int(pct_fat)/total); pct_cho=100-pct_prot-pct_fat
-    g_prot=round((kcal*pct_prot/100)/4,1); g_fat=round((kcal*pct_fat/100)/9,1); g_cho=round((kcal*pct_cho/100)/4,1)
-    gkg_prot=round(g_prot/(w or 1),2); gkg_cho=round(g_cho/(w or 1),2)
+    g_prot=round((kcal*pct_prot/100)/4,1); g_fat=round((kcal*pct_fat/100)/9,1); g_cho=round((kcal*pct_cho)/4,1)
+    gkg_prot=round(g_prot/(w or 1),2)
     g_cho_c=round(g_cho*(pct_cho_complex or 0)/100,1); g_cho_s=round(g_cho-g_cho_c,1)
     sat,poli,mono=fat_split; subtotal=max(1,int(sat)+int(poli)+int(mono))
     sat=pct_fat*int(sat)/subtotal; poli=pct_fat*int(poli)/subtotal; mono=pct_fat-sat-poli
     g_sat=round((kcal*sat/100)/9,1); g_poli=round((kcal*poli/100)/9,1); g_mono=round((kcal*mono/100)/9,1)
-    return {"pct":{"prot":pct_prot,"fat":pct_fat,"cho":pct_cho},
+    return {"pct":{"prot":pct_prot,"fat":pct_fat,"cho":100-pct_prot-pct_fat},
             "g":{"prot":g_prot,"fat":g_fat,"cho":g_cho,"cho_c":g_cho_c,"cho_s":g_cho_s,"sat":g_sat,"poli":g_poli,"mono":g_mono},
-            "gkg":{"prot":gkg_prot,"cho":gkg_cho}}
+            "gkg":{"prot":gkg_prot}}
+
 def exchanges_from_kcal(k):
     if not k or k<=0: return {g:0 for g in EXCHANGES}
     f=max(1.0, min(2.4, k/2000))
@@ -130,10 +151,10 @@ def distribute_by_meal(d):
         for m,fr in split.items(): out[m][g]=round(tot*fr,1)
     return out
 
-# ---------- Sidebar (reactivo en vivo; valores iniciales cómodos) ----------
+# ---------- Sidebar (en vivo) ----------
 with st.sidebar:
     st.subheader("Paciente")
-    modo = st.selectbox("Modo", ["Ambulatorio (recomendado)"])
+    st.selectbox("Modo", ["Ambulatorio (recomendado)"])
     nombre = st.text_input("Nombre y apellido", "")
     sexo = st.selectbox("Sexo biológico", ["Femenino","Masculino"])
     edad = st.number_input("Edad (años)", 1, 120, 30, step=1)
@@ -142,7 +163,7 @@ with st.sidebar:
 
     st.caption("Ecuación y PAL")
     eq = st.selectbox("Ecuación de MB", ["Mifflin–St Jeor","Harris–Benedict"])
-    pal_key = st.selectbox("PAL (actividad)", list(PAL.keys()), index=2)  # Moderado por defecto
+    pal_key = st.selectbox("PAL (actividad)", list(PAL.keys()), index=2)
     ade_on = st.checkbox("Añadir ADE/TEF (~10%)", value=False)
     objetivo = st.selectbox("Objetivo", ["Pérdida de peso","Mantenimiento","Ganancia (magro)"], index=1)
 
@@ -173,6 +194,8 @@ kcal = kcal_target(tee, objetivo)
 imc = bmi(peso, talla_cm)
 icc = whr(cintura, cadera)
 ict = whtr(cintura, talla_cm)
+
+# %grasa por pliegues si hay datos
 pct_grasa_dw=None
 if sum([p_bi, p_tri, p_sub, p_sup])>0:
     dens = dw_density(sexo, edad, p_bi, p_tri, p_sub, p_sup)
@@ -226,10 +249,38 @@ df_plan = pd.DataFrame({
     "FAT": [EXCHANGES[g]["FAT"] for g in diario.keys()],
     "Porción": [EXCHANGES[g]["portion"] for g in diario.keys()]
 })
-st.dataframe(df_plan, use_container_width=True, height=320)
-st.dataframe(pd.DataFrame([{"Tiempo":m, **gr} for m,gr in por_comida.items()]), use_container_width=True, height=300)
+st.dataframe(df_plan, use_container_width=True, height=300)
+st.dataframe(pd.DataFrame([{"Tiempo":m, **gr} for m,gr in por_comida.items()]), use_container_width=True, height=240)
+
+# ---------- Laboratorios con tarjetas verde/rojo ----------
+st.header("Laboratorios – interpretación")
+def lab_card(nombre, valor, ok, warn=None):
+    if valor is None or valor==0: return
+    cls = "bg-ok" if ok else ("bg-warn" if (warn if warn is not None else False) else "bg-bad")
+    st.markdown(f"<div class='card {cls}'><b>{nombre}:</b> {valor}</div>", unsafe_allow_html=True)
+
+colL1, colL2, colL3 = st.columns(3)
+
+with colL1:
+    if glicemia>0:
+        lab_card("Glucosa (mg/dL)", glicemia, 70<=glicemia<100, warn=(100<=glicemia<126))
+    if hba1c>0:
+        lab_card("HbA1c (%)", hba1c, hba1c<5.7, warn=(5.7<=hba1c<6.5))
+    if hdl>0:
+        low=40 if sexo.startswith("Mas") else 50
+        lab_card("HDL (mg/dL)", hdl, hdl>=low)
+
+with colL2:
+    if ldl>0:  lab_card("LDL (mg/dL)", ldl, ldl<100)
+    if tg>0:   lab_card("Triglicéridos (mg/dL)", tg, tg<150)
+    if tc>0:   lab_card("Colesterol total (mg/dL)", tc, tc<200)
+
+with colL3:
+    if insulina>0: lab_card("Insulina (µUI/mL)", insulina, insulina<=25)
+    # Puedes ampliar aquí más analitos con sus rangos si los necesitas
 
 # ---------- Exportar PLAN (DOCX) ----------
+st.markdown("---")
 if DOCX:
     doc = Document(); stl=doc.styles["Normal"]; stl.font.name="Calibri"; stl.font.size=Pt(11)
     doc.add_heading("Plan de alimentación – " + BRAND, 0)
